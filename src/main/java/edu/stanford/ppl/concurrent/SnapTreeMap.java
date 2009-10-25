@@ -748,46 +748,363 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         return true;
     }
 
-    private void fixHeightAndRebalance(final Node<K,V> node) {
-        
+    private static final int UnlinkRequired = -1;
+    private static final int RebalanceRequired = -2;
+    private static final int NothingRequired = -3;
+
+    private int nodeCondition(final Node<K,V> node) {
+        final Node<K,V> nL = node.left;
+        final Node<K,V> nR = node.right;
+
+        // unlink is required? (counter to our optimistic expectation)
+        if ((nL == null || nR == null) && node.vOpt == null) {
+            return UnlinkRequired;
+        }
+
+        final int hN = node.height;
+        final int hL0 = height(nL);
+        final int hR0 = height(nR);
+        final int hNRepl = 1 + Math.max(hL0, hR0);
+        final int bal = hL0 - hR0;
+
+        // rebalance is required?
+        if (bal < -1 || bal > 1) {
+            return RebalanceRequired;
+        }
+
+        return hN != hNRepl ? hNRepl : NothingRequired;
+    }
+
+    private void fixHeightAndRebalance(Node<K,V> node) {
+        while (node.parent != null) {
+            final int condition = nodeCondition(node);
+            if (condition == NothingRequired || isUnlinked(node.shrinkOVL)) {
+                // nothing to do, or no point in fixing this node
+                return;
+            }
+
+            final Node<K,V> next;
+            if (condition != UnlinkRequired && condition != RebalanceRequired) {
+                synchronized (node) {
+                    next = attemptFixHeight_nl(node);
+                }
+            } else {
+                final Node<K,V> nParent = node.parent;
+                synchronized (nParent) {
+                    if (nParent != node.parent) {
+                        // retry
+                        next = null;
+                    } else {
+                        synchronized (node) {
+                            next = attemptFixOrRebalance_nl(nParent, node);
+                        }
+                    }
+                }
+            }
+
+            if (next != null) {
+                node = next;
+            }
+            // else RETRY
+        }
+    }
+
+    /** Attempts to fix node's height under the assumption that it won't have to
+     *  be rebalanced.   Returns null on optimistic failure, the parent node if
+     *  the height was changed, or rhe if no change occurred.  node must be
+     *  locked on entry.
+     */
+    private Node<K,V> attemptFixHeight_nl(final Node<K,V> node) {
+        final int c = nodeCondition(node);
+        switch (c) {
+            case RebalanceRequired:
+            case UnlinkRequired:
+                return null;
+            case NothingRequired:
+                return holderRef.get();
+            default:
+                node.height = c;
+                return node.parent;
+        }
+    }
+
+    /** nParent and n must be locked on entry.  Returns null on optimistic
+     *  failure, the node to fixAndRebalance if the height has changed or a
+     *  rebalance was performed, or the rhe if we are done.
+     */
+    private Node<K,V> attemptFixOrRebalance_nl(final Node<K,V> nParent, final Node<K,V> n) {
+
+      final Node<K,V> nL = n.unsharedLeft();
+      final Node<K,V> nR = n.unsharedRight();
+
+      if ((nL == null || nR == null) && n.vOpt == null) {
+          return attemptUnlink_nl(nParent, n) ? nParent : null;
+      }
+
+      final int hN = n.height;
+      final int hL0 = height(nL);
+      final int hR0 = height(nR);
+      final int hNRepl = 1 + Math.max(hL0, hR0);
+      final int bal = hL0 - hR0;
+
+      if (bal > 1) {
+          if (!attemptBalanceRight_nl(nParent, n, nL, hR0)) {
+              return null;
+          }
+      } else if(bal < -1) {
+          if (!attemptBalanceLeft_nl(nParent, n, nR, hL0)) {
+              return null;
+          }
+      } else if (hNRepl != hN) {
+          // we've got more than enough locks to do a height change, no need to
+          // trigger a retry
+          n.height = hNRepl;
+      } else {
+          // nothing to do
+          return holderRef.get();
+      }
+
+      // Change means that we must continue rebalancing higher up.  No change in
+      // parent height, no more rebalancing required.
+      return fixHeight(nParent) ? nParent : holderRef.get();
+    }
+
+    private boolean fixHeight(final Node<K,V> n) {
+      final int hL = height(n.left);
+      final int hR = height(n.right);
+      final int hRepl = 1 + Math.max(hL, hR);
+      if (hRepl != n.height) {
+        n.height = hRepl;
+        return true;
+      } else {
+        return false;
+      }
+    }
+
+    /** Returns true on success, false on optimistic failure. */
+    private boolean attemptBalanceRight_nl(final Node<K,V> nParent,
+                                           final Node<K,V> n,
+                                           final Node<K,V> nL,
+                                           final int hR0) {
+      // L is too large, we will rotate-right.  If L.R is taller
+      // than L.L, then we will first rotate-left L.
+      synchronized(nL) {
+        //require (nL.epoch eq epoch)
+        final int hL = nL.height;
+        if (hL - hR0 <= 1) {
+          return false; // retry
+        } else {
+          final Node<K,V> nLR = nL.unsharedRight();
+          final int hLR0 = height(nLR);
+          if (height(nL.left) >= hLR0) {
+            // rotate right based on our snapshot of hLR
+            rotateRight(nParent, n, nL, hR0, nLR, hLR0);
+          } else {
+            synchronized(nLR) {
+              //require (nLR.epoch eq epoch)
+              // if our hLR snapshot is incorrect then we might actually need to do a single rotate-right
+              final int hLR = nLR.height;
+              if (height(nL.left) >= hLR) {
+                rotateRight(nParent, n, nL, hR0, nLR, hLR);
+              } else {
+                // actually need a rotate right-over-left
+                rotateRightOverLeft(nParent, n, nL, hR0, nLR);
+              }
+            }
+          }
+          return true;
+        }
+      }
+    }
+
+    private boolean attemptBalanceLeft_nl(final Node<K,V> nParent,
+                                          final Node<K,V> n,
+                                          final Node<K,V> nR,
+                                          final int hL0) {
+        synchronized (nR) {
+            //require (nR.epoch eq epoch)
+        final int hR = nR.height;
+        if (hL0 - hR >= -1) {
+          return false; // retry
+        } else {
+          final Node<K,V> nRL = nR.unsharedLeft();
+          final int hRL0 = height(nRL);
+          if (height(nR.right) >= hRL0) {
+            rotateLeft(nParent, n, hL0, nR, nRL, hRL0);
+          } else {
+            synchronized(nRL) {
+              final int hRL = nRL.height;
+              if (height(nR.right) >= hRL) {
+                rotateLeft(nParent, n, hL0, nR, nRL, hRL);
+              } else {
+                rotateLeftOverRight(nParent, n, hL0, nR, nRL);
+              }
+            }
+          }
+          return true;
+        }
+      }
     }
 
     private void rotateRight(final Node<K,V> nParent,
                              final Node<K,V> n,
-                             final int hN,
                              final Node<K,V> nL,
-                             final int hL,
                              final int hR,
                              final Node<K,V> nLR,
                              final int hLR) {
-      final long nodeOVL = n.shrinkOVL;
-      n.shrinkOVL = beginChange(nodeOVL);
+        final long nodeOVL = n.shrinkOVL;
+        n.shrinkOVL = beginChange(nodeOVL);
 
-      // fix up n links, careful to be compatible with concurrent traversal for all but n
-      n.left = nLR;
-      if (nLR != null) {
-          nLR.parent = n;
-      }
+        // fix up n links, careful to be compatible with concurrent traversal for all but n
+        n.left = nLR;
+        if (nLR != null) {
+            nLR.parent = n;
+        }
 
-      nL.right = n;
-      n.parent = nL;
+        nL.right = n;
+        n.parent = nL;
 
-      if (nParent.left == n) {
-          nParent.left = nL;
-      } else {
-          nParent.right = nL;
-      }
-      nL.parent = nParent;
+        if (nParent.left == n) {
+            nParent.left = nL;
+        } else {
+            nParent.right = nL;
+        }
+        nL.parent = nParent;
 
-      // fix up heights links
-      final int hNRepl = 1 + Math.max(hLR, hR);
-      n.height = hNRepl;
-      final int hLRepl = 1 + Math.max(height(nL.left), hNRepl);
-      nL.height = hLRepl;
+        // fix up heights links
+        final int hNRepl = 1 + Math.max(hLR, hR);
+        n.height = hNRepl;
+        nL.height = 1 + Math.max(height(nL.left), hNRepl);
 
-      n.shrinkOVL = endChange(nodeOVL);
+        n.shrinkOVL = endChange(nodeOVL);
     }
 
+    private void rotateLeft(final Node<K,V> nParent,
+                            final Node<K,V> n,
+                            final int hL,
+                            final Node<K,V> nR,
+                            final Node<K,V> nRL,
+                            final int hRL) {
+        final long nodeOVL = n.shrinkOVL;
+        n.shrinkOVL = beginChange(nodeOVL);
+
+        // fix up n links, careful to be compatible with concurrent traversal for all but n
+        n.right = nRL;
+        if (nRL != null) {
+            nRL.parent = n;
+        }
+
+        nR.left = n;
+        n.parent = nR;
+
+        if (nParent.left == n) {
+            nParent.left = nR;
+        } else {
+            nParent.right = nR;
+        }
+        nR.parent = nParent;
+
+        // fix up heights
+        final int  hNRepl = 1 + Math.max(hL, hRL);
+        n.height = hNRepl;
+        nR.height = 1 + Math.max(hNRepl, height(nR.right));
+
+        n.shrinkOVL = endChange(nodeOVL);
+    }
+
+    private void rotateRightOverLeft(final Node<K,V> nParent,
+                                     final Node<K,V> n,
+                                     final Node<K,V> nL,
+                                     final int hR,
+                                     final Node<K,V> nLR) {
+        final long nodeOVL = n.shrinkOVL;
+        final long leftOVL = nL.shrinkOVL;
+        n.shrinkOVL = beginChange(nodeOVL);
+        nL.shrinkOVL = beginChange(leftOVL);
+
+        final Node<K,V> nLRL = nLR.unsharedLeft();
+        final Node<K,V> nLRR = nLR.unsharedRight();
+
+        // fix up n links, careful about the order!
+        n.left = nLRR;
+        if (nLRR != null) {
+            nLRR.parent = n;
+        }
+
+        nL.right = nLRL;
+        if (nLRL != null) {
+            nLRL.parent = nL;
+        }
+
+        nLR.left = nL;
+        nL.parent = nLR;
+        nLR.right = n;
+        n.parent = nLR;
+
+        if (nParent.left == n) {
+            nParent.left = nLR;
+        } else {
+            nParent.right = nLR;
+        }
+        nLR.parent = nParent;
+
+        // fix up heights
+        final int hNRepl = 1 + Math.max(height(nLRR), hR);
+        n.height = hNRepl;
+        final int hLRepl = 1 + Math.max(height(nL.left), height(nLRL));
+        nL.height = hLRepl;
+        nLR.height = 1 + Math.max(hLRepl, hNRepl);
+
+        n.shrinkOVL = endChange(nodeOVL);
+        nL.shrinkOVL = endChange(leftOVL);
+    }
+
+    private void rotateLeftOverRight(final Node<K,V> nParent,
+                                     final Node<K,V> n,
+                                     final int hL,
+                                     final Node<K,V> nR,
+                                     final Node<K,V> nRL) {
+        final long nodeOVL = n.shrinkOVL;
+        final long rightOVL = nR.shrinkOVL;
+        n.shrinkOVL = beginChange(nodeOVL);
+        nR.shrinkOVL = beginChange(rightOVL);
+
+        final Node<K,V> nRLL = nRL.unsharedLeft();
+        final Node<K,V> nRLR = nRL.unsharedRight();
+
+        // fix up n links, careful about the order!
+        n.right = nRLL;
+        if (nRLL != null) {
+            nRLL.parent = n;
+        }
+
+        nR.left = nRLR;
+        if (nRLR != null) {
+            nRLR.parent = nR;
+        }
+
+        nRL.right = nR;
+        nR.parent = nRL;
+        nRL.left = n;
+        n.parent = nRL;
+
+        if (nParent.left == n) {
+            nParent.left = nRL;
+        } else {
+            nParent.right = nRL;
+        }
+        nRL.parent = nParent;
+
+        // fix up heights
+        final int hNRepl = 1 + Math.max(hL, height(nRLL));
+        n.height = hNRepl;
+        final int hRRepl = 1 + Math.max(height(nRLR), height(nR.right));
+        nR.height = hRRepl;
+        nRL.height = 1 + Math.max(hNRepl, hRRepl);
+
+        n.shrinkOVL = endChange(nodeOVL);
+        nR.shrinkOVL = endChange(rightOVL);
+    }
 
     //////////////// views
 
