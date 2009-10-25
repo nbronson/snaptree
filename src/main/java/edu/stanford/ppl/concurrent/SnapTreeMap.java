@@ -115,7 +115,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return node != null && node.parent == null; 
         }
 
-        private static <K,V> Node<K,V> markShared(final Node<K,V> node) {
+        static <K,V> Node<K,V> markShared(final Node<K,V> node) {
             if (node != null) {
                 node.parent = null;
             }
@@ -479,6 +479,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             // one, so we pass true as the parameter to awaitShutdown().
             if (h.epoch.awaitShutdown(true)) {
                 // We're on cleanup duty.  CAS detects a racing clear().
+                Node.markShared(h.right);
                 holderRef.compareAndSet(h, new RootHolder<K,V>(h));
             }
         }
@@ -493,7 +494,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         final RootHolder<K,V> h = holderRef.get();
 
         while (true) {
-            final Node<K,V> right = h.right;
+            final Node<K,V> right = h.unsharedRight();
             if (right == null) {
                 // key is not present
                 if (!f.isDefinedAt(null, expected) ||
@@ -534,8 +535,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    /** If successful returns the previous value, Nullvopt, or Removedvopt.
-     *  The caller should retry if this method returns null.
+    /** If successful returns the non-null previous value, SpecialNull for a
+     *  null previous value, or null if not previously in the map.
+     *  The caller should retry if this method returns SpecialRetry.
      */
     private Object attemptUpdate(final Object key,
                                  final Comparable<? super K> k,
