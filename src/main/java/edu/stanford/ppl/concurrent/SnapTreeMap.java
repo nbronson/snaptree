@@ -397,6 +397,88 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
+    @SuppressWarnings("unchecked")
+    // TODO: @Override
+    public K firstKey() {
+        return (K) firstImpl(true);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map.Entry<K,V> firstEntry() {
+        return (Map.Entry<K,V>) firstImpl(false);
+    }
+
+    /** Returns a key if returnKey is true, a Map.Entry otherwise. */
+    private Object firstImpl(final boolean returnKey) {
+        while (true) {
+            final Node<K,V> right = holderRef.get().right;
+            if (right == null) {
+                throw new NoSuchElementException();
+            } else {
+                final long ovl = right.shrinkOVL;
+                if (isShrinkingOrUnlinked(ovl)) {
+                    right.waitUntilShrinkCompleted(ovl);
+                    // RETRY
+                } else if (right == holderRef.get().right) {
+                    // the reread of .right is the one protected by our read of ovl
+                    final Object vo = attemptFirst(returnKey, right, ovl);
+                    if (vo != SpecialRetry) {
+                        return vo;
+                    }
+                    // else RETRY
+                }
+            }
+        }
+    }
+
+    private Object attemptFirst(final boolean returnKey, final Node<K,V> node, final long nodeOVL) {
+        while (true) {
+            final Node<K,V> child = node.left;
+
+            if (child == null) {
+                // read of the value must be protected by the OVL, because we
+                // must linearize against another thread that inserts a new min
+                // key and then changes this key's value
+                final Object vo = node.vOpt;
+
+                if (node.shrinkOVL != nodeOVL) {
+                    return SpecialRetry;
+                }
+                
+                assert(vo != null);
+
+                return returnKey ? node.key : new SimpleImmutableEntry<K,V>(node.key, decodeNull(vo));
+            } else {
+                // child is non-null
+                final long childOVL = child.shrinkOVL;
+                if (isShrinkingOrUnlinked(childOVL)) {
+                    child.waitUntilShrinkCompleted(childOVL);
+
+                    if (node.shrinkOVL != nodeOVL) {
+                        return SpecialRetry;
+                    }
+                    // else RETRY
+                } else if (child != node.left) {
+                    // this .child is the one that is protected by childOVL
+                    if (node.shrinkOVL != nodeOVL) {
+                        return SpecialRetry;
+                    }
+                    // else RETRY
+                } else {
+                    if (node.shrinkOVL != nodeOVL) {
+                        return SpecialRetry;
+                    }
+
+                    final Object vo = attemptFirst(returnKey, child, childOVL);
+                    if (vo != SpecialRetry) {
+                        return vo;
+                    }
+                    // else RETRY
+                }
+            }
+        }
+    }
+
     //////////////// update
 
     private static abstract class UpdateFunction {
@@ -486,6 +568,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     // manages updates to the root holder
+    @SuppressWarnings("unchecked")
     private Object updateRoot(final Object key,
                               final Comparable<? super K> k,
                               final UpdateFunction f,
@@ -499,7 +582,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                 // key is not present
                 if (!f.isDefinedAt(null, expected) ||
                         newValue == null ||
-                        attemptInsertIntoEmpty(h, key, newValue)) {
+                        attemptInsertIntoEmpty(h, (K)key, newValue)) {
                     // nothing needs to be done, or we were successful, prev value is Absent
                     return null;
                 }
@@ -522,7 +605,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     private boolean attemptInsertIntoEmpty(final RootHolder<K,V> holder,
-                                           final Object key,
+                                           final K key,
                                            final Object vOpt) {
         synchronized (holder) {
             if (holder.right == null) {
@@ -539,6 +622,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
      *  null previous value, or null if not previously in the map.
      *  The caller should retry if this method returns SpecialRetry.
      */
+    @SuppressWarnings("unchecked")
     private Object attemptUpdate(final Object key,
                                  final Comparable<? super K> k,
                                  final UpdateFunction f,
@@ -604,7 +688,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                             }
 
                             // Create a new leaf
-                            node.setChild(dirToC, new Node(key, 1, newValue, node, 0L, null, null));
+                            node.setChild(dirToC, new Node<K,V>((K)key, 1, newValue, node, 0L, null, null));
                             success = true;
                         }
                     }
