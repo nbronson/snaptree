@@ -752,6 +752,43 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         
     }
 
+    private void rotateRight(final Node<K,V> nParent,
+                             final Node<K,V> n,
+                             final int hN,
+                             final Node<K,V> nL,
+                             final int hL,
+                             final int hR,
+                             final Node<K,V> nLR,
+                             final int hLR) {
+      final long nodeOVL = n.shrinkOVL;
+      n.shrinkOVL = beginChange(nodeOVL);
+
+      // fix up n links, careful to be compatible with concurrent traversal for all but n
+      n.left = nLR;
+      if (nLR != null) {
+          nLR.parent = n;
+      }
+
+      nL.right = n;
+      n.parent = nL;
+
+      if (nParent.left == n) {
+          nParent.left = nL;
+      } else {
+          nParent.right = nL;
+      }
+      nL.parent = nParent;
+
+      // fix up heights links
+      final int hNRepl = 1 + Math.max(hLR, hR);
+      n.height = hNRepl;
+      final int hLRepl = 1 + Math.max(height(nL.left), hNRepl);
+      nL.height = hLRepl;
+
+      n.shrinkOVL = endChange(nodeOVL);
+    }
+
+
     //////////////// views
 
     @Override
