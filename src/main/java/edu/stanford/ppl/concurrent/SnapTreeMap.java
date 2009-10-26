@@ -8,7 +8,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V> {
+public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V>, Cloneable {
 
     /** This is a special value that indicates the presence of a null value,
      *  to differentiate from the absence of a value.
@@ -167,21 +167,28 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         //////// per-node blocking
 
         private void waitUntilShrinkCompleted(final long ovl) {
-            if (isShrinking(ovl)) {
-                for (int tries = 0; tries < SpinCount + YieldCount; ++tries) {
-                    if (shrinkOVL != ovl) {
-                        // we're done
-                        return;
-                    }
-                    if (tries >= SpinCount) {
-                        Thread.yield();
-                    }
-                }
-                // spin and yield failed, use the nuclear option
-                synchronized (this) {
-                    // we can't have gotten the lock unless the shrink was over
+            if (!isShrinking(ovl)) {
+                return;
+            }
+
+            for (int tries = 0; tries < SpinCount; ++tries) {
+                if (shrinkOVL != ovl) {
+                    return;
                 }
             }
+
+            for (int tries = 0; tries < YieldCount; ++tries) {
+                Thread.yield();
+                if (shrinkOVL != ovl) {
+                    return;
+                }
+            }
+
+            // spin and yield failed, use the nuclear option
+            synchronized (this) {
+                // we can't have gotten the lock unless the shrink was over
+            }
+            assert(shrinkOVL != ovl);
         }
 
 
@@ -205,14 +212,6 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
     private static int height(final Node<?,?> node) {
         return node == null ? 0 : node.height;
-    }
-
-    private static <K,V> Node<K,V> left(final Node<K,V> node) {
-        return node == null ? null : node.left;
-    }
-
-    private static <K,V> Node<K,V> right(final Node<K,V> node) {
-        return node == null ? null : node.right;
     }
 
     @SuppressWarnings("unchecked")
@@ -241,6 +240,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         this.comparator = comparator;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public SnapTreeMap<K,V> clone() {
         final SnapTreeMap<K,V> m;
@@ -547,7 +547,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             if (h.epoch.enter()) {
                 int sizeDelta = 0;
                 try {
-                    final Object prev = updateRoot(key, k, f, expected, newValue);
+                    final Object prev = updateUnderRoot(key, k, f, expected, newValue);
                     if (f.isDefinedAt(prev, expected)) {
                         sizeDelta = (prev != null ? -1 : 0) + (newValue != null ? 1 : 0);
                     }
@@ -569,11 +569,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
     // manages updates to the root holder
     @SuppressWarnings("unchecked")
-    private Object updateRoot(final Object key,
-                              final Comparable<? super K> k,
-                              final UpdateFunction f,
-                              final Object expected,
-                              final Object newValue) {
+    private Object updateUnderRoot(final Object key,
+                                   final Comparable<? super K> k,
+                                   final UpdateFunction f,
+                                   final Object expected,
+                                   final Object newValue) {
         final RootHolder<K,V> h = holderRef.get();
 
         while (true) {
@@ -609,7 +609,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                                            final Object vOpt) {
         synchronized (holder) {
             if (holder.right == null) {
-                holder.right = new Node<K,V>((K)key, 1, vOpt, holder, 0L, null, null);
+                holder.right = new Node<K,V>(key, 1, vOpt, holder, 0L, null, null);
                 holder.height = 2;
                 return true;
             } else {
@@ -830,6 +830,118 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         node.vOpt = null;
 
         return true;
+    }
+
+    public Map.Entry<K,V> pollFirstEntry() {
+        return pollExtremeEntry(Left);
+    }
+
+    public Map.Entry<K,V> pollLastEntry() {
+        return pollExtremeEntry(Right);
+    }
+
+    private Map.Entry<K,V> pollExtremeEntry(final char dir) {
+        while (true) {
+            final RootHolder<K,V> h = holderRef.get();
+            if (h.epoch.enter()) {
+                int sizeDelta = 0;
+                try {
+                    final Map.Entry<K,V> prev = pollExtremeEntryUnderRoot(dir);
+                    if (prev != null) {
+                        sizeDelta = -1;
+                    }
+                    return prev;
+                } finally {
+                    h.epoch.exit(sizeDelta);
+                }
+            }
+            // Someone is shutting down the epoch.  We can't do anything until
+            // this one is done.  We can take responsibility for creating a new
+            // one, so we pass true as the parameter to awaitShutdown().
+            if (h.epoch.awaitShutdown(true)) {
+                // We're on cleanup duty.  CAS detects a racing clear().
+                Node.markShared(h.right);
+                holderRef.compareAndSet(h, new RootHolder<K,V>(h));
+            }
+        }
+    }
+
+    private Map.Entry<K,V> pollExtremeEntryUnderRoot(final char dir) {
+        final RootHolder<K,V> h = holderRef.get();
+
+        while (true) {
+            final Node<K,V> right = h.unsharedRight();
+            if (right == null) {
+                // tree is empty, nothing to remove
+                return null;
+            } else {
+                final long ovl = right.shrinkOVL;
+                if (isShrinkingOrUnlinked(ovl)) {
+                    right.waitUntilShrinkCompleted(ovl);
+                    // RETRY
+                } else if (right == h.right) {
+                    // this is the protected .right
+                    final Map.Entry<K,V> result = attemptRemoveExtreme(dir, h, right, ovl);
+                    if (result != null) {
+                        return result;
+                    }
+                    // else RETRY
+                }
+            }
+        }
+    }
+
+    private Map.Entry<K,V> attemptRemoveExtreme(final char dir,
+                                                final Node<K,V> parent,
+                                                final Node<K,V> node,
+                                                final long nodeOVL) {
+        assert (nodeOVL != UnlinkedOVL);
+
+        while (true) {
+            final Node<K,V> child = node.child(dir);
+            if (child == null) {
+                // potential unlink, get ready by locking the parent
+                final Map.Entry<K,V> result;
+                synchronized (parent) {
+                    if (isUnlinked(parent.shrinkOVL) || node.parent != parent) {
+                        return null;
+                    }
+
+                    synchronized (node) {
+                        final Object vo = node.vOpt;
+                        if (node.child(dir) != null || !attemptUnlink_nl(parent, node)) {
+                            return null;
+                        }
+                        // success!
+                        result = new SimpleImmutableEntry<K,V>(node.key, decodeNull(vo));
+                    }
+                }
+                fixHeightAndRebalance(parent);
+                return result;
+            } else {
+                // keep going down
+                final long childOVL = child.shrinkOVL;
+                if (isShrinkingOrUnlinked(childOVL)) {
+                    child.waitUntilShrinkCompleted(childOVL);
+                    // RETRY
+                } else if (child != node.child(dir)) {
+                    // this second read is important, because it is protected
+                    // by childOVL
+                    // RETRY
+                } else {
+                    // validate the read that our caller took to get to node
+                    if (node.shrinkOVL != nodeOVL) {
+                        return null;
+                    }
+
+                    final Map.Entry<K,V> result = attemptRemoveExtreme(dir, node, child, childOVL);
+                    if (result != null) {
+                        return result;
+                    }
+                    // else RETRY
+                }
+            }
+        }
     }
 
     private static final int UnlinkRequired = -1;
