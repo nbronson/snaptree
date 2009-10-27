@@ -1,15 +1,14 @@
 /* SnapTree - (c) 2009 Stanford University - PPL */
 
-// Epoch
+// SizedEpoch
 
 package edu.stanford.ppl.concurrent;
 
-import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
-class Epoch {
+class SizedEpoch {
     /** NumStripes*4 should cross multiple cache lines. */
     static final int NumStripes = nextPowerOfTwo(Integer.valueOf(System.getProperty("epoch.stripes", "64")));
 
@@ -17,10 +16,10 @@ class Epoch {
         return 1 << (32 - Integer.numberOfLeadingZeros(n - 1));
     }
 
-    static final AtomicReferenceFieldUpdater<Epoch,Object> WakeupUpdater
-            = AtomicReferenceFieldUpdater.newUpdater(Epoch.class, Object.class, "wakeup");
-    static final AtomicLongFieldUpdater<Epoch> CleanupAcquiredUpdater
-            = AtomicLongFieldUpdater.newUpdater(Epoch.class, "cleanupAcquired");
+    static final AtomicReferenceFieldUpdater<SizedEpoch,Object> WakeupUpdater
+            = AtomicReferenceFieldUpdater.newUpdater(SizedEpoch.class, Object.class, "wakeup");
+    static final AtomicLongFieldUpdater<SizedEpoch> CleanupAcquiredUpdater
+            = AtomicLongFieldUpdater.newUpdater(SizedEpoch.class, "cleanupAcquired");
 
 
     /** Size is in the high int (&lt;&lt; 32), entryCount in the low int. */
@@ -33,7 +32,7 @@ class Epoch {
     // TODO: fix the problem of an unfortunate thread hash code collision causing long-term false sharing
     private final int currentIndex = Thread.currentThread().hashCode() & (NumStripes - 1);
 
-    public Epoch(final int initialSize) {
+    public SizedEpoch(final int initialSize) {
         entryCountsAndSizes.set(0, ((long) initialSize) << 32);
     }
 

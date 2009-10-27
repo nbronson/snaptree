@@ -195,16 +195,16 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     private static class RootHolder<K,V> extends Node<K,V> {
-        final Epoch epoch;
+        final SizedEpoch epoch;
 
         RootHolder() {
             super(null, 1, null, null, 0L, null, null);
-            epoch = new Epoch(0);
+            epoch = new SizedEpoch(0);
         }
 
         RootHolder(final RootHolder<K,V> snapshot) {
             super(null, 1 + snapshot.height, null, null, 0L, null, snapshot.right);
-            epoch = new Epoch(snapshot.epoch.size());
+            epoch = new SizedEpoch(snapshot.epoch.size());
         }
     }
 
