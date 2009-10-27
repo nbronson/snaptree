@@ -274,8 +274,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
     @Override
     public void clear() {
-        // TODO: implement
-        throw new UnsupportedOperationException();
+        holderRef.set(new RootHolder<K,V>());
+    }
+
+    public Comparator<? super K> comparator() {
+        return comparator;
     }
 
     //////// search
@@ -400,16 +403,29 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     @SuppressWarnings("unchecked")
     // TODO: @Override
     public K firstKey() {
-        return (K) firstImpl(true);
+        return (K) extreme(true, Left);
     }
 
     @SuppressWarnings("unchecked")
+    // TODO: @Override
     public Map.Entry<K,V> firstEntry() {
-        return (Map.Entry<K,V>) firstImpl(false);
+        return (SimpleImmutableEntry<K,V>) extreme(false, Left);
     }
 
-    /** Returns a key if returnKey is true, a Map.Entry otherwise. */
-    private Object firstImpl(final boolean returnKey) {
+    @SuppressWarnings("unchecked")
+    // TODO: @Override
+    public K lastKey() {
+        return (K) extreme(true, Right);
+    }
+
+    @SuppressWarnings("unchecked")
+    // TODO: @Override
+    public Map.Entry<K,V> lastEntry() {
+        return (SimpleImmutableEntry<K,V>) extreme(false, Right);
+    }
+
+    /** Returns a key if returnKey is true, a SimpleImmutableEntry otherwise. */
+    private Object extreme(final boolean returnKey, final char dir) {
         while (true) {
             final Node<K,V> right = holderRef.get().right;
             if (right == null) {
@@ -421,7 +437,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                     // RETRY
                 } else if (right == holderRef.get().right) {
                     // the reread of .right is the one protected by our read of ovl
-                    final Object vo = attemptFirst(returnKey, right, ovl);
+                    final Object vo = attemptExtreme(returnKey, dir, right, ovl);
                     if (vo != SpecialRetry) {
                         return vo;
                     }
@@ -431,9 +447,12 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    private Object attemptFirst(final boolean returnKey, final Node<K,V> node, final long nodeOVL) {
+    private Object attemptExtreme(final boolean returnKey,
+                                  final char dir,
+                                  final Node<K,V> node,
+                                  final long nodeOVL) {
         while (true) {
-            final Node<K,V> child = node.left;
+            final Node<K,V> child = node.child(dir);
 
             if (child == null) {
                 // read of the value must be protected by the OVL, because we
@@ -458,7 +477,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                         return SpecialRetry;
                     }
                     // else RETRY
-                } else if (child != node.left) {
+                } else if (child != node.child(dir)) {
                     // this .child is the one that is protected by childOVL
                     if (node.shrinkOVL != nodeOVL) {
                         return SpecialRetry;
@@ -469,7 +488,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                         return SpecialRetry;
                     }
 
-                    final Object vo = attemptFirst(returnKey, child, childOVL);
+                    final Object vo = attemptExtreme(returnKey, dir, child, childOVL);
                     if (vo != SpecialRetry) {
                         return vo;
                     }
@@ -832,6 +851,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         return true;
     }
 
+    //////////////// NavigableMap stuff
+
     public Map.Entry<K,V> pollFirstEntry() {
         return pollExtremeEntry(Left);
     }
@@ -943,6 +964,10 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             }
         }
     }
+
+    
+
+    //////////////// tree balance and height info repair
 
     private static final int UnlinkRequired = -1;
     private static final int RebalanceRequired = -2;
