@@ -104,7 +104,7 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
     }
 
 
-    private static class Node<K,V> implements Entry<K,V> {
+    private static class Node<K,V> {
         final K key;
         volatile int height;
 
@@ -132,21 +132,6 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
             this.changeOVL = changeOVL;
             this.left = left;
             this.right = right;
-        }
-
-        @Override
-        public K getKey() { return key; }
-
-        @Override
-        @SuppressWarnings("unchecked")
-        public V getValue() {
-            final Object tmp = vOpt;
-            return tmp == SpecialNull ? null : (V)tmp;
-        }
-
-        @Override
-        public V setValue(final V v) {
-            throw new UnsupportedOperationException();
         }
 
         Node<K,V> child(char dir) { return dir == Left ? left : right; }
