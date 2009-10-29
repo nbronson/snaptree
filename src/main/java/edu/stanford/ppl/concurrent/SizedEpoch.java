@@ -30,26 +30,25 @@ class SizedEpoch {
     private volatile long cleanupAcquired;
 
     // TODO: fix the problem of an unfortunate thread hash code collision causing long-term false sharing
-    private final int currentIndex = Thread.currentThread().hashCode() & (NumStripes - 1);
 
     public SizedEpoch(final int initialSize) {
         entryCountsAndSizes.set(0, ((long) initialSize) << 32);
     }
 
     /** Returns true if entry was successful, false if shutdown has already begun on this Epoch. */
-    public boolean enter() {
-        entryCountsAndSizes.getAndIncrement(currentIndex);
+    public boolean enter(final int id) {
+        entryCountsAndSizes.getAndIncrement(id & (NumStripes - 1));
         if (wakeup != null) {
-            exit(0);
+            exit(id, 0);
             return false;
         } else {
             return true;
         }
     }
 
-    public void exit(final int sizeDelta) {
+    public void exit(final int id, final int sizeDelta) {
         final long ecasDelta = (((long) sizeDelta) << 32) - 1L;
-        final long after = entryCountsAndSizes.addAndGet(currentIndex, ecasDelta);
+        final long after = entryCountsAndSizes.addAndGet(id & (NumStripes - 1), ecasDelta);
         if (((int) after) == 0) {
             final Object w = wakeup;
             if (w != null) {

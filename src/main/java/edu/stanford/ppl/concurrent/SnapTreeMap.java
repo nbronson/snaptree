@@ -557,9 +557,10 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                           final Object expected,
                           final Object newValue) {
         final Comparable<? super K> k = comparable(key);
+        final int id = Thread.currentThread().hashCode();
         while (true) {
             final RootHolder<K,V> h = holderRef.get();
-            if (h.epoch.enter()) {
+            if (h.epoch.enter(id)) {
                 int sizeDelta = 0;
                 try {
                     final Object prev = updateUnderRoot(key, k, func, expected, newValue, h);
@@ -568,7 +569,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                     }
                     return prev;
                 } finally {
-                    h.epoch.exit(sizeDelta);
+                    h.epoch.exit(id, sizeDelta);
                 }
             }
             // Someone is shutting down the epoch.  We can't do anything until
@@ -867,9 +868,10 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     private Map.Entry<K,V> pollExtremeEntry(final char dir) {
+        final int id = Thread.currentThread().hashCode();
         while (true) {
             final RootHolder<K,V> h = holderRef.get();
-            if (h.epoch.enter()) {
+            if (h.epoch.enter(id)) {
                 int sizeDelta = 0;
                 try {
                     final Map.Entry<K,V> prev = pollExtremeEntryUnderRoot(dir);
@@ -878,7 +880,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                     }
                     return prev;
                 } finally {
-                    h.epoch.exit(sizeDelta);
+                    h.epoch.exit(id, sizeDelta);
                 }
             }
             // Someone is shutting down the epoch.  We can't do anything until
