@@ -1194,6 +1194,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                                      final Node<K,V> nLR,
                                      final int hLR) {
         final long nodeOVL = n.shrinkOVL;
+
+        final Node<K,V> nPL = nParent.left;
+
         n.shrinkOVL = beginChange(nodeOVL);
 
         n.left = nLR;
@@ -1204,7 +1207,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         nL.right = n;
         n.parent = nL;
 
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nL;
         } else {
             nParent.right = nL;
@@ -1249,6 +1252,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                                     final int hRL,
                                     final int hRR) {
         final long nodeOVL = n.shrinkOVL;
+
+        final Node<K,V> nPL = nParent.left;
+
         n.shrinkOVL = beginChange(nodeOVL);
 
         // fix up n links, careful to be compatible with concurrent traversal for all but n
@@ -1260,7 +1266,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         nR.left = n;
         n.parent = nR;
 
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nR;
         } else {
             nParent.right = nR;
@@ -1270,7 +1276,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         // fix up heights
         final int  hNRepl = 1 + Math.max(hL, hRL);
         n.height = hNRepl;
-        nR.height = 1 + Math.max(hNRepl, height(nR.right));
+        nR.height = 1 + Math.max(hNRepl, hRR);
 
         n.shrinkOVL = endChange(nodeOVL);
 
@@ -1296,11 +1302,14 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                                              final int hLRL) {
         final long nodeOVL = n.shrinkOVL;
         final long leftOVL = nL.shrinkOVL;
-        n.shrinkOVL = beginChange(nodeOVL);
-        nL.shrinkOVL = beginChange(leftOVL);
 
+        final Node<K,V> nPL = nParent.left;
         final Node<K,V> nLRL = nLR.unsharedLeft();
         final Node<K,V> nLRR = nLR.unsharedRight();
+        final int hLRR = height(nLRR);
+
+        n.shrinkOVL = beginChange(nodeOVL);
+        nL.shrinkOVL = beginChange(leftOVL);
 
         // fix up n links, careful about the order!
         n.left = nLRR;
@@ -1318,7 +1327,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         nLR.right = n;
         n.parent = nLR;
 
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nLR;
         } else {
             nParent.right = nLR;
@@ -1326,7 +1335,6 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         nLR.parent = nParent;
 
         // fix up heights
-        final int hLRR = height(nLRR);
         final int hNRepl = 1 + Math.max(hLRR, hR);
         n.height = hNRepl;
         final int hLRepl = 1 + Math.max(hLL, hLRL);
@@ -1372,11 +1380,14 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                                              final int hRLR) {
         final long nodeOVL = n.shrinkOVL;
         final long rightOVL = nR.shrinkOVL;
-        n.shrinkOVL = beginChange(nodeOVL);
-        nR.shrinkOVL = beginChange(rightOVL);
 
+        final Node<K,V> nPL = nParent.left;
         final Node<K,V> nRLL = nRL.unsharedLeft();
         final Node<K,V> nRLR = nRL.unsharedRight();
+        final int hRLL = height(nRLL);
+
+        n.shrinkOVL = beginChange(nodeOVL);
+        nR.shrinkOVL = beginChange(rightOVL);
 
         // fix up n links, careful about the order!
         n.right = nRLL;
@@ -1394,7 +1405,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         nRL.left = n;
         n.parent = nRL;
 
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nRL;
         } else {
             nParent.right = nRL;
@@ -1402,7 +1413,6 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         nRL.parent = nParent;
 
         // fix up heights
-        final int hRLL = height(nRLL);
         final int hNRepl = 1 + Math.max(hL, hRLL);
         n.height = hNRepl;
         final int hRRepl = 1 + Math.max(hRLR, hRR);

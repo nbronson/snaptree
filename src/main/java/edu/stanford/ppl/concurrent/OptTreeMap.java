@@ -86,9 +86,6 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
     private static boolean isUnlinked(final long ovl) {
         return ovl == UnlinkedOVL;
     }
-    private static boolean isGrowingOrUnlinked(final long ovl) {
-        return (ovl & (OVLGrowLockMask | UnlinkedOVL)) != 0;
-    }
     private static boolean isShrinkingOrUnlinked(final long ovl) {
         return (ovl & (OVLShrinkLockMask | UnlinkedOVL)) != 0;
     }
@@ -1094,6 +1091,9 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
                                      final int hLR) {
         final long nodeOVL = n.changeOVL;
         final long leftOVL = nL.changeOVL;
+        
+        final Node<K,V> nPL = nParent.left;
+
         n.changeOVL = beginShrink(nodeOVL);
         nL.changeOVL = beginGrow(leftOVL);
 
@@ -1105,7 +1105,7 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
 
         n.left = nLR;
         nL.right = n;
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nL;
         } else {
             nParent.right = nL;
@@ -1157,12 +1157,15 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
                                     final int hRR) {
         final long nodeOVL = n.changeOVL;
         final long rightOVL = nR.changeOVL;
+
+        final Node<K,V> nPL = nParent.left;
+
         n.changeOVL = beginShrink(nodeOVL);
         nR.changeOVL = beginGrow(rightOVL);
 
         n.right = nRL;
         nR.left = n;
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nR;
         } else {
             nParent.right = nR;
@@ -1177,7 +1180,7 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
         // fix up heights
         final int  hNRepl = 1 + Math.max(hL, hRL);
         n.height = hNRepl;
-        nR.height = 1 + Math.max(hNRepl, height(nR.right));
+        nR.height = 1 + Math.max(hNRepl, hRR);
 
         nR.changeOVL = endGrow(rightOVL);
         n.changeOVL = endShrink(nodeOVL);
@@ -1205,18 +1208,21 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
         final long nodeOVL = n.changeOVL;
         final long leftOVL = nL.changeOVL;
         final long leftROVL = nLR.changeOVL;
+
+        final Node<K,V> nPL = nParent.left;
+        final Node<K,V> nLRL = nLR.left;
+        final Node<K,V> nLRR = nLR.right;
+        final int hLRR = height(nLRR);
+
         n.changeOVL = beginShrink(nodeOVL);
         nL.changeOVL = beginShrink(leftOVL);
         nLR.changeOVL = beginGrow(leftROVL);
-
-        final Node<K,V> nLRL = nLR.left;
-        final Node<K,V> nLRR = nLR.right;
 
         n.left = nLRR;
         nL.right = nLRL;
         nLR.left = nL;
         nLR.right = n;
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nLR;
         } else {
             nParent.right = nLR;
@@ -1233,7 +1239,6 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
         }
 
         // fix up heights
-        final int hLRR = height(nLRR);
         final int hNRepl = 1 + Math.max(hLRR, hR);
         n.height = hNRepl;
         final int hLRepl = 1 + Math.max(hLL, hLRL);
@@ -1281,18 +1286,21 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
         final long nodeOVL = n.changeOVL;
         final long rightOVL = nR.changeOVL;
         final long rightLOVL = nRL.changeOVL;
+
+        final Node<K,V> nPL = nParent.left;
+        final Node<K,V> nRLL = nRL.left;
+        final int hRLL = height(nRLL);
+        final Node<K,V> nRLR = nRL.right;
+
         n.changeOVL = beginShrink(nodeOVL);
         nR.changeOVL = beginShrink(rightOVL);
         nRL.changeOVL = beginGrow(rightLOVL);
-
-        final Node<K,V> nRLL = nRL.left;
-        final Node<K,V> nRLR = nRL.right;
 
         n.right = nRLL;
         nR.left = nRLR;
         nRL.right = nR;
         nRL.left = n;
-        if (nParent.left == n) {
+        if (nPL == n) {
             nParent.left = nRL;
         } else {
             nParent.right = nRL;
@@ -1309,7 +1317,6 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
         }
 
         // fix up heights
-        final int hRLL = height(nRLL);
         final int hNRepl = 1 + Math.max(hL, hRLL);
         n.height = hNRepl;
         final int hRRepl = 1 + Math.max(hRLR, hRR);
