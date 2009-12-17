@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 class SizedEpoch {
-    /** NumStripes*4 should cross multiple cache lines. */
+    /** NumStripes*sizeof(long) should cross multiple cache lines. */
     static final int NumStripes = nextPowerOfTwo(Integer.valueOf(System.getProperty("epoch.stripes", "64")));
 
     private static int nextPowerOfTwo(final int n) {
