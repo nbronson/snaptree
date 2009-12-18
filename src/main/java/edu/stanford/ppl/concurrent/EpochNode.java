@@ -147,27 +147,31 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
             return null;
         }
         final EpochNode existing = getChildFromField(which);
-        return (existing != null) ? existing : createChild(which);
+        return (existing != null) ? existing : constructPresentChild(which);
     }
 
     @SuppressWarnings("unchecked")
-    private EpochNode createChild(final int which) {
+    private EpochNode constructPresentChild(final int which) {
         final EpochNode n = new Child(this, which);
         return childrenUpdaters[which].compareAndSet(this, null, n) ? n : getChildFromField(which);
     }
 
     private EpochNode getOrCreateChild(final int which) {
+        final EpochNode existing = getChildFromField(which);
+        return (existing != null) ? existing : createChild(which);
+    }
+
+    private EpochNode createChild(final int which) {
         while (true) {
             final long state = get();
-            final EpochNode existing = getChild(state, which);
-            if (existing != null || isClosing(state)) {
-                // either we're happy with what we've got, or we're stuck with it
-                return existing;
+            if (isClosing(state)) {
+                // whatever we've got is what we've got
+                return getChild(state, which);
             }
             if (compareAndSet(state, withChildPresent(state, which))) {
                 // the child now should exist, but we must still actually
                 // construct and link in the instance
-                return createChild(which);
+                return constructPresentChild(which);
             }
         }
     }
