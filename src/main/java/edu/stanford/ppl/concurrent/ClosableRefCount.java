@@ -223,12 +223,12 @@ abstract class ClosableRefCount extends AtomicLong {
             if (isClosing(state)) {
                 return null;
             }
-            if (!isAnyChildPresent(state) || tries >= TRIES_BEFORE_SUBTREE) {
+            if (isAnyChildPresent(state) || tries >= TRIES_BEFORE_SUBTREE) {
                 // Go deeper if we have previously detected contention, or if
                 // we are currently detecting it.  Lazy computation of our
                 // current identity.
                 if (id == 0) {
-                    id = System.identityHashCode(Thread.currentThread()) | Integer.MAX_VALUE;
+                    id = System.identityHashCode(Thread.currentThread()) | Integer.MIN_VALUE;
                 }
                 final ClosableRefCount child = getOrCreateChild(id & BF_MASK);
                 if (child == null) {

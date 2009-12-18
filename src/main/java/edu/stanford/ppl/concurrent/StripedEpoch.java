@@ -1,55 +1,51 @@
 /* SnapTree - (c) 2009 Stanford University - PPL */
 
-// SizedEpoch
+// StripedSizedEpoch
 
 package edu.stanford.ppl.concurrent;
 
-import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
-class SizedEpoch {
-    /** NumStripes*sizeof(long) should cross multiple cache lines. */
+class StripedEpoch {
+    /** NumStripes*sizeof(int) should cross multiple cache lines. */
     static final int NumStripes = nextPowerOfTwo(Integer.valueOf(System.getProperty("epoch.stripes", "64")));
 
     private static int nextPowerOfTwo(final int n) {
         return 1 << (32 - Integer.numberOfLeadingZeros(n - 1));
     }
 
-    static final AtomicReferenceFieldUpdater<SizedEpoch,Object> WakeupUpdater
-            = AtomicReferenceFieldUpdater.newUpdater(SizedEpoch.class, Object.class, "wakeup");
-    static final AtomicLongFieldUpdater<SizedEpoch> CleanupAcquiredUpdater
-            = AtomicLongFieldUpdater.newUpdater(SizedEpoch.class, "cleanupAcquired");
+    static final AtomicReferenceFieldUpdater<StripedEpoch,Object> WakeupUpdater
+            = AtomicReferenceFieldUpdater.newUpdater(StripedEpoch.class, Object.class, "wakeup");
+    static final AtomicLongFieldUpdater<StripedEpoch> CleanupAcquiredUpdater
+            = AtomicLongFieldUpdater.newUpdater(StripedEpoch.class, "cleanupAcquired");
 
 
-    /** Size is in the high int (&lt;&lt; 32), entryCount in the low int. */
-    private final AtomicLongArray entryCountsAndSizes = new AtomicLongArray(NumStripes);
+    private final AtomicIntegerArray entryCounts = new AtomicIntegerArray(NumStripes);
 
     private volatile Object wakeup;
-    private volatile int completedSize = -1;
     private volatile long cleanupAcquired;
+    private volatile boolean completed;
 
     // TODO: fix the problem of an unfortunate thread hash code collision causing long-term false sharing
 
-    public SizedEpoch(final int initialSize) {
-        entryCountsAndSizes.set(0, ((long) initialSize) << 32);
+    public StripedEpoch() {
     }
 
-    /** Returns true if entry was successful, false if shutdown has already begun on this Epoch. */
+    /** Returns true if entry was successful, false if shutdown has already begun on this StripedEpoch. */
     public boolean enter(final int id) {
-        entryCountsAndSizes.getAndIncrement(id & (NumStripes - 1));
+        entryCounts.getAndIncrement(id & (NumStripes - 1));
         if (wakeup != null) {
-            exit(id, 0);
+            exit(id);
             return false;
         } else {
             return true;
         }
     }
 
-    public void exit(final int id, final int sizeDelta) {
-        final long ecasDelta = (((long) sizeDelta) << 32) - 1L;
-        final long after = entryCountsAndSizes.addAndGet(id & (NumStripes - 1), ecasDelta);
-        if (((int) after) == 0) {
+    public void exit(final int id) {
+        if (entryCounts.addAndGet(id & (NumStripes - 1), -1) == 0) {
             final Object w = wakeup;
             if (w != null) {
                 synchronized(w) {
@@ -107,29 +103,17 @@ class SizedEpoch {
     }
 
     private boolean isPending() {
-        if (completedSize != -1) {
+        if (completed) {
             return false;
         }
 
-        int size = 0;
         for (int i = 0; i < NumStripes; ++i) {
-            final long ecas = entryCountsAndSizes.get(i);
-            if (((int) ecas) != 0) {
+            if (entryCounts.get(i) != 0) {
                 return true;
             }
-            size += (int)(ecas >> 32);
         }
-        if (completedSize == -1) {
-            completedSize = size;
-        }
-        return false;
-    }
 
-    public int size() {
-        final int z = completedSize;
-        if (z == -1) {
-            throw new IllegalStateException("can't read size prior to shutdown");
-        }
-        return z;
+        completed = true;
+        return false;
     }
 }
