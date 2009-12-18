@@ -60,7 +60,6 @@ public class EpochTest extends TestCase {
         final Epoch e = new Epoch() {
             protected void onClosed(final int dataSum) {
                 closed[0] = true;
-                assert(dataSum == numThreads * (numThreads + 1L) * arrivalsPerThread / 2);
             }
         };
         ParUtil.parallel(numThreads, new ParUtil.Block() {

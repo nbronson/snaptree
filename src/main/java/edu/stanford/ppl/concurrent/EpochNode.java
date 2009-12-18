@@ -54,14 +54,14 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private static long withEmpty(long state) { return state | EMPTY; }
 
     private static final int CHILD_PRESENT_SHIFT = 24;
-    private static final long ANY_CHILD_PRESENT = ((long) BF_MASK) << CHILD_PRESENT_SHIFT;
+    private static final long ANY_CHILD_PRESENT = ((1L << BF) - 1L) << CHILD_PRESENT_SHIFT;
     private static long childPresentBit(int which) { return 1L << (CHILD_PRESENT_SHIFT + which); }
     private static boolean isAnyChildPresent(long state) { return (state & ANY_CHILD_PRESENT) != 0; }
     private static boolean isChildPresent(long state, int which) { return (state & childPresentBit(which)) != 0; }
     private static long withChildPresent(long state, int which) { return state | childPresentBit(which); }
 
     private static final int CHILD_EMPTY_SHIFT = 28;
-    private static long ANY_CHILD_EMPTY = ((long) BF_MASK) << CHILD_EMPTY_SHIFT;
+    private static long ANY_CHILD_EMPTY = ((1L << BF) - 1L) << CHILD_EMPTY_SHIFT;
     private static long childEmptyBit(int which) { return 1L << (CHILD_EMPTY_SHIFT + which); }
     private static boolean isChildEmpty(long state, int which) { return (state & childEmptyBit(which)) != 0; }
     private static long withChildEmpty(long state, int which, long childState) {
@@ -71,7 +71,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private static long withAllChildrenEmpty(long state) { return state | ANY_CHILD_EMPTY; }
 
     private static final long READY_FOR_EMPTY_MASK = ANY_CHILD_EMPTY | CLOSED | ENTRY_COUNT_MASK;
-    private static final long READY_FOR_EMPTY_EXPECTED = CLOSED;
+    private static final long READY_FOR_EMPTY_EXPECTED = ANY_CHILD_EMPTY | CLOSED;
     private static boolean readyForEmpty(long state) { return (state & READY_FOR_EMPTY_MASK) == READY_FOR_EMPTY_EXPECTED; }
     private static long recomputeEmpty(long state) { return readyForEmpty(state) ? withEmpty(state) : state; }
 
@@ -237,7 +237,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
             final long after = recomputeEmpty(withDataDelta(state - 1, dataDelta));
             if (compareAndSet(state, after)) {
                 if (isEmpty(after)) {
-                    newlyEmpty(dataSum(state));
+                    newlyEmpty(after);
                 }
                 return;
             }
