@@ -102,47 +102,58 @@ abstract public class Epoch {
 
     private abstract static class Node extends AtomicLong implements Ticket {
     
-        private static int TRIES_BEFORE_SUBTREE = 3;
-        private static int CLOSER_HEAD_START = 1000;
+        private static final int TRIES_BEFORE_SUBTREE = 3;
+        private static final int CLOSER_HEAD_START = 1000;
+
+        /** This includes the root.  3 or fewer procs gets 2, 15 or fewer gets
+         *  3, 63 or fewer 4, 255 or fewer 5, ...
+         *  TODO: evaluate the best choice here
+         */ 
+        private static final int MAX_LEVELS = 2 + log4(Runtime.getRuntime().availableProcessors());
+
+        /** Returns floor(log_base_4(value)). */
+        private static int log4(final int value) {
+            return (31 - Integer.numberOfLeadingZeros(value)) / 2;
+        }
 
         //////////////// branching factor
 
-        private static int LOG_BF = 2;
-        private static int BF = 1 << LOG_BF;
-        private static int BF_MASK = BF - 1;
+        private static final int LOG_BF = 2;
+        private static final int BF = 1 << LOG_BF;
+        private static final int BF_MASK = BF - 1;
 
         //////////////// bit packing
 
-        private static int ENTRY_COUNT_BITS = 20;
-        private static int ENTRY_COUNT_MASK = (1 << ENTRY_COUNT_BITS) - 1;
+        private static final int ENTRY_COUNT_BITS = 20;
+        private static final int ENTRY_COUNT_MASK = (1 << ENTRY_COUNT_BITS) - 1;
 
         private static int entryCount(long state) { return ((int) state) & ENTRY_COUNT_MASK; }
         private static boolean willOverflow(long state) { return entryCount(state) == ENTRY_COUNT_MASK; }
 
-        private static int DATA_SUM_SHIFT = 32;
+        private static final int DATA_SUM_SHIFT = 32;
         private static int dataSum(long state) { return (int)(state >> DATA_SUM_SHIFT); }
         private static long withDataDelta(long state, int delta) { return state + (((long) delta) << DATA_SUM_SHIFT); }
 
-        private static long CLOSING = (1L << 21);
+        private static final long CLOSING = (1L << 21);
         private static boolean isClosing(long state) { return (state & CLOSING) != 0L; }
         private static long withClosing(long state) { return state | CLOSING; }
 
-        private static long CLOSED = (1L << 22);
+        private static final long CLOSED = (1L << 22);
         private static boolean isClosed(long state) { return (state & CLOSED) != 0L; }
         private static long withClosed(long state) { return state | CLOSED; }
 
-        private static long EMPTY = (1L << 23);
+        private static final long EMPTY = (1L << 23);
         private static boolean isEmpty(long state) { return (state & EMPTY) != 0L; }
         private static long withEmpty(long state) { return state | EMPTY; }
 
-        private static int CHILD_PRESENT_SHIFT = 24;
-        private static long ANY_CHILD_PRESENT = ((long) BF_MASK) << CHILD_PRESENT_SHIFT;
+        private static final int CHILD_PRESENT_SHIFT = 24;
+        private static final long ANY_CHILD_PRESENT = ((long) BF_MASK) << CHILD_PRESENT_SHIFT;
         private static long childPresentBit(int which) { return 1L << (CHILD_PRESENT_SHIFT + which); }
         private static boolean isAnyChildPresent(long state) { return (state & ANY_CHILD_PRESENT) != 0; }
         private static boolean isChildPresent(long state, int which) { return (state & childPresentBit(which)) != 0; }
         private static long withChildPresent(long state, int which) { return state | childPresentBit(which); }
 
-        private static int CHILD_EMPTY_SHIFT = 28;
+        private static final int CHILD_EMPTY_SHIFT = 28;
         private static long ANY_CHILD_EMPTY = ((long) BF_MASK) << CHILD_EMPTY_SHIFT;
         private static long childEmptyBit(int which) { return 1L << (CHILD_EMPTY_SHIFT + which); }
         private static boolean isChildEmpty(long state, int which) { return (state & childEmptyBit(which)) != 0; }
@@ -152,12 +163,12 @@ abstract public class Epoch {
         }
         private static long withAllChildrenEmpty(long state) { return state | ANY_CHILD_EMPTY; }
 
-        private static long READY_FOR_EMPTY_MASK = ANY_CHILD_EMPTY | CLOSED | ENTRY_COUNT_MASK;
-        private static long READY_FOR_EMPTY_EXPECTED = CLOSED;
+        private static final long READY_FOR_EMPTY_MASK = ANY_CHILD_EMPTY | CLOSED | ENTRY_COUNT_MASK;
+        private static final long READY_FOR_EMPTY_EXPECTED = CLOSED;
         private static boolean readyForEmpty(long state) { return (state & READY_FOR_EMPTY_MASK) == READY_FOR_EMPTY_EXPECTED; }
         private static long recomputeEmpty(long state) { return readyForEmpty(state) ? withEmpty(state) : state; }
 
-        private static long ENTRY_FAST_PATH_MASK = ANY_CHILD_EMPTY | CLOSING | (1L << (ENTRY_COUNT_BITS - 1));
+        private static final long ENTRY_FAST_PATH_MASK = ANY_CHILD_EMPTY | CLOSING | (1L << (ENTRY_COUNT_BITS - 1));
 
         /** Not closed, no children, and no overflow possible. */
         private static boolean isEntryFastPath(long state) { return (state & ENTRY_FAST_PATH_MASK) == 0L; }
@@ -251,7 +262,7 @@ abstract public class Epoch {
                 return this;
             }
             else {
-                return attemptArrive(0);
+                return attemptArrive(0, 1);
             }
         }
 
@@ -263,14 +274,16 @@ abstract public class Epoch {
             return (h - (h << 7)) | (1 << 31);
         }
 
-        private Node attemptArrive(int id) {
+        /** level 1 is the root. */
+        private Node attemptArrive(int id, final int level) {
             int tries = 0;
             while (true) {
                 final long state = get();
                 if (isClosing(state)) {
                     return null;
                 }
-                if (isAnyChildPresent(state) || tries >= TRIES_BEFORE_SUBTREE) {
+                if (isAnyChildPresent(state) ||
+                        (tries >= TRIES_BEFORE_SUBTREE && level < MAX_LEVELS)) {
                     // Go deeper if we have previously detected contention, or if
                     // we are currently detecting it.  Lazy computation of our
                     // current identity.
@@ -281,7 +294,7 @@ abstract public class Epoch {
                     if (child == null) {
                         return null;
                     }
-                    return child.attemptArrive(id >> LOG_BF);
+                    return child.attemptArrive(id >> LOG_BF, level + 1);
                 }
                 if (willOverflow(state)) {
                     throw new IllegalStateException("maximum ref count of " + ENTRY_COUNT_MASK + " exceeded");
@@ -431,4 +444,4 @@ abstract public class Epoch {
             }
         }
     }
-    }
+}
