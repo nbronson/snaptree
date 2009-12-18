@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 /** Provides an implementation of the behavior of an {@link Epoch}. */
 abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
 
-    private static final int TRIES_BEFORE_SUBTREE = 3;
+    private static final int TRIES_BEFORE_SUBTREE = 2;
     private static final int CLOSER_HEAD_START = 1000;
 
     /** This includes the root.  3 or fewer procs gets 2, 15 or fewer gets
@@ -360,6 +360,28 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
                 }
                 return;
             }
+        }
+    }
+
+    /** For debugging purposes. */
+    int computeSpread() {
+        final long state = get();
+        if (isAnyChildPresent(state)) {
+            int sum = 0;
+            for (int which = 0; which < BF; ++which) {
+                final EpochNode child = getChild(state, which);
+                if (child != null) {
+                    sum += child.computeSpread();
+                }
+                else {
+                    // child would be created for arrive, so count it
+                    sum += 1;
+                }
+            }
+            return sum;
+        }
+        else {
+            return 1;
         }
     }
 }

@@ -79,6 +79,12 @@ abstract public class Epoch {
      */
     abstract protected void onClosed(int dataSum);
 
+    //////////////// debugging stuff
+
+    int computeSpread() {
+        return _root.computeSpread();
+    }
+
     //////////////// internal implementation
 
     private class Root extends EpochNode {
