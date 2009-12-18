@@ -75,7 +75,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private static boolean readyForEmpty(long state) { return (state & READY_FOR_EMPTY_MASK) == READY_FOR_EMPTY_EXPECTED; }
     private static long recomputeEmpty(long state) { return readyForEmpty(state) ? withEmpty(state) : state; }
 
-    private static final long ENTRY_FAST_PATH_MASK = ANY_CHILD_EMPTY | CLOSING | (1L << (ENTRY_COUNT_BITS - 1));
+    private static final long ENTRY_FAST_PATH_MASK = ANY_CHILD_PRESENT | CLOSING | (1L << (ENTRY_COUNT_BITS - 1));
 
     /** Not closed, no children, and no overflow possible. */
     private static boolean isEntryFastPath(long state) { return (state & ENTRY_FAST_PATH_MASK) == 0L; }
@@ -116,6 +116,11 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private volatile EpochNode _child1;
     private volatile EpochNode _child2;
     private volatile EpochNode _child3;
+
+    // this gets us to 64 bytes on 32-bit JVMs, a common cache line size
+    long _padding0;
+    long _padding1;
+    long _padding2;
 
     EpochNode() {
         _parent = null;
