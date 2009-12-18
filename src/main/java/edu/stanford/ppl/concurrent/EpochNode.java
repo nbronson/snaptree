@@ -95,10 +95,10 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     //////////////// instance state
 
     private static final AtomicReferenceFieldUpdater[] childrenUpdaters = {
-        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "child0"),
-        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "child1"),
-        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "child2"),
-        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "child3")
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child0"),
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child1"),
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child2"),
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child3")
     };
 
     private final EpochNode _parent;

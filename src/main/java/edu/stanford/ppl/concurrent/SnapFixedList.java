@@ -54,7 +54,7 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
             super(initialValue, 0);
         }
 
-        protected Node freezeAndClone(final Node value) {
+        protected Node freezeAndClone(final Node value, final boolean alreadyFrozen) {
             return new Node(new Generation(), value);
         }
     }
@@ -148,7 +148,7 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
             throw new Error("unexpected", xx);
         }
         // height and size are done properly by the magic Cloneable.clone()
-        copy._rootRef = new COWMgr(_rootRef.frozen());
+        copy._rootRef = new COWMgr(new Node(new Generation(), _rootRef.frozen()));
         return copy;
     }
 

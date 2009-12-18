@@ -33,11 +33,12 @@ abstract public class CopyOnWriteManager<E> {
 
         protected void onClosed(final int dataSum) {
             queued.queued = new Root();
-            queued.value = freezeAndClone(value);
+            queued.value = freezeAndClone(value, false);
             queued.initialSize = initialSize + dataSum;
             queued.closed = new CountDownLatch(1);
             queued.cleanPrev = this; 
             _active = queued;
+            closed.countDown();
         }
 
         public void awaitClosed() {
@@ -63,7 +64,7 @@ abstract public class CopyOnWriteManager<E> {
         _active = new Root(initialValue, initialSize);
     }
 
-    abstract protected E freezeAndClone(E value);
+    abstract protected E freezeAndClone(E value, boolean alreadyFrozen);
 
     public Epoch.Ticket beginMutation() {
         while (true) {
@@ -104,6 +105,10 @@ abstract public class CopyOnWriteManager<E> {
             a.awaitClosed();
             return a.value;
         }
+    }
+
+    public E cloned() {
+        return freezeAndClone(frozen(), true);
     }
 
     public int size() {
