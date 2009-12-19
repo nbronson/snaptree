@@ -12,16 +12,16 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private static final int TRIES_BEFORE_SUBTREE = 2;
     private static final int CLOSER_HEAD_START = 1000;
 
-    /** This includes the root.  3 or fewer procs gets 2, 15 or fewer gets
-     *  3, 63 or fewer 4, 255 or fewer 5.  We observe that the node count
-     *  reported by {@link #computeSpread} is roughly twice the number of
-     *  hardware contexts in use.
+    /** This includes the root.  7 or fewer procs gets 2, 63 or fewer gets
+     *  3, 511 or fewer 4.  We observe that the node count reported by {@link
+     *  #computeSpread} is roughly twice the number of hardware contexts in
+     *  use.
      */
-    private static final int MAX_LEVELS = 2 + log4(Runtime.getRuntime().availableProcessors());
+    private static final int MAX_LEVELS = 2 + log8(Runtime.getRuntime().availableProcessors());
 
-    /** Returns floor(log_base_4(value)). */
-    private static int log4(final int value) {
-        return (31 - Integer.numberOfLeadingZeros(value)) / 2;
+    /** Returns floor(log_base_8(value)). */
+    private static int log8(final int value) {
+        return (31 - Integer.numberOfLeadingZeros(value)) / 3;
     }
 
     //////////////// branching factor
