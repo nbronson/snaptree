@@ -1,18 +1,18 @@
 /* SnapTree - (c) 2009 Stanford University - PPL */
 
-// SnapFixedList
+// SnapReferenceArray
 package edu.stanford.ppl.concurrent;
 
 import java.util.AbstractList;
+import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
-/** Implements a concurrent fixed-size <code>List</code> with fast clone and
- *  consistent iteration.  Reads and writes have volatile semantics, and an
- *  iterator will enumerate an atomic snapshot of the list as it existed when
- *  the iterator was created.  No provision is provided to grow or shrink the
- *  list.
+/** Implements a concurrent fixed-size collection with fast clone.  Reads and
+ *  writes have volatile semantics.  No provision is provided to grow or shrink
+ *  the collection.  Modelled after {@link AtomicReferenceArray}.
  */
-public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
+public class SnapReferenceArray<E> implements Iterable<E>, Cloneable {
 
     private static final int LOG_BF = 5;
     private static final int BF = 1 << LOG_BF;
@@ -26,15 +26,15 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
     }
 
     private static class Node extends AtomicReferenceArray<Object> {
-        // never modified after initialization of the SnapFixedList, but
+        // never modified after initialization of the SnapReferenceArray, but
         // convenient to be non-final
         Generation gen;
 
-        Node(final Generation gen, final int size, final Object initialValue) {
-            super(size);
+        Node(final Generation gen, final int length, final Object initialValue) {
+            super(length);
             this.gen = gen;
             if (initialValue != null) {
-                for (int i = 0; i < size; ++i) {
+                for (int i = 0; i < length; ++i) {
                     lazySet(i, initialValue);
                 }
             }
@@ -47,6 +47,10 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
                 lazySet(i, src.get(i));
             }
         }
+
+        Node(final Node src) {
+            this(new Generation(), src);
+        }
     }
 
     private static class COWMgr extends CopyOnWriteManager<Node> {
@@ -55,28 +59,28 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
         }
 
         protected Node freezeAndClone(final Node value) {
-            return new Node(new Generation(), value);
+            return new Node(value);
         }
     }
 
-    /** 0 if _size == 0, otherwise the smallest positive int such that
-     *  (1L << (LOG_BF * _height)) >= _size.
+    /** 0 if _length == 0, otherwise the smallest positive int such that
+     *  (1L << (LOG_BF * _height)) >= _length.
      */
     private final int _height;
 
-    private final int _size;
+    private final int _length;
 
     private CopyOnWriteManager<Node> _rootRef;
 
-    public SnapFixedList(final int size) {
-        this(size, null);
+    public SnapReferenceArray(final int length) {
+        this(length, null);
     }
 
-    public SnapFixedList(final int size, final E element) {
+    public SnapReferenceArray(final int length, final E element) {
         int height = 0;
         Node partial = null;
 
-        if (size > 0) {
+        if (length > 0) {
             // We will insert the gen into all of the partials (since they
             // are used exactly once).  We reuse the fulls, so we will give
             // them a null gen that will cause them to be copied before any
@@ -90,10 +94,10 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
 
                 // This is the number of nodes required at this level.  They
                 // are either all full, or all but one full and one partial.
-                int levelSize = ((size - 1) >> (LOG_BF * (height - 1))) + 1;
+                int levelSize = ((length - 1) >> (LOG_BF * (height - 1))) + 1;
 
                 // Partial is only present if this level doesn't evenly divide into
-                // pieces of size BF, or if a lower level didn't divide evenly.
+                // pieces of length BF, or if a lower level didn't divide evenly.
                 Node newP = null;
                 if (partial != null || (levelSize & BF_MASK) != 0) {
                     final int partialBF = ((levelSize - 1) & BF_MASK) + 1;
@@ -135,51 +139,55 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
         }
 
         _height = height;
-        _size = size;
+        _length = length;
         _rootRef = new COWMgr(partial);
     }
 
-    public SnapFixedList<E> clone() {
-        final SnapFixedList<E> copy;
+    @SuppressWarnings("unchecked")
+    public SnapReferenceArray<E> clone() {
+        final SnapReferenceArray<E> copy;
         try {
-            copy = (SnapFixedList<E>) super.clone();
+            copy = (SnapReferenceArray<E>) super.clone();
         }
         catch (final CloneNotSupportedException xx) {
             throw new Error("unexpected", xx);
         }
-        // height and size are done properly by the magic Cloneable.clone()
-        copy._rootRef = new COWMgr(new Node(new Generation(), _rootRef.frozen()));
+        // height and length are done properly by the magic Cloneable.clone()
+        copy._rootRef = new COWMgr(new Node(_rootRef.frozen()));
         return copy;
     }
 
-    @Override
-    public int size() {
-        return _size;
+    public int length() {
+        return _length;
     }
 
     @SuppressWarnings("unchecked")
-    @Override
     public E get(final int index) {
-        if (index < 0 || index >= _size) {
+        checkBounds(index);
+
+        return (E) readableLeaf(_rootRef.read(), index).get(index & BF_MASK);
+    }
+
+    private void checkBounds(final int index) {
+        if (index < 0 || index >= _length) {
             throw new IndexOutOfBoundsException();
         }
+    }
 
-        Node cur = _rootRef.read();
+    private Node readableLeaf(final Node root, final int index) {
+        Node cur = root;
         for (int h = _height - 1; h >= 1; --h) {
             cur = (Node) cur.get((index >> (LOG_BF * h)) & BF_MASK);
         }
-        return (E) cur.get(index & BF_MASK);
+        return cur;
     }
 
-    @Override
-    public E set(final int index, final E newValue) {
-        if (index < 0 || index >= _size) {
-            throw new IndexOutOfBoundsException();
-        }
+    public void set(final int index, final E newValue) {
+        checkBounds(index);
 
         final Epoch.Ticket ticket = _rootRef.beginMutation();
         try {
-            return setImpl(_rootRef.mutable(), index, newValue);
+            mutableLeaf(_rootRef.mutable(), index).set(index & BF_MASK, newValue);
         }
         finally {
             ticket.leave(0);
@@ -187,8 +195,28 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
     }
 
     @SuppressWarnings("unchecked")
-    private E setImpl(final Node root, final int index, final E newValue) {
-        return (E) mutableLeaf(root, index).getAndSet(index & BF_MASK, newValue);
+    public E getAndSet(final int index, final E newValue) {
+        checkBounds(index);
+
+        final Epoch.Ticket ticket = _rootRef.beginMutation();
+        try {
+            return (E) mutableLeaf(_rootRef.mutable(), index).getAndSet(index & BF_MASK, newValue);
+        }
+        finally {
+            ticket.leave(0);
+        }
+    }
+
+    public boolean compareAndSet(final int index, final E expected, final E newValue) {
+        checkBounds(index);
+
+        final Epoch.Ticket ticket = _rootRef.beginMutation();
+        try {
+            return mutableLeaf(_rootRef.mutable(), index).compareAndSet(index & BF_MASK, expected, newValue);
+        }
+        finally {
+            ticket.leave(0);
+        }
     }
 
     private Node mutableLeaf(final Node root, final int index) {
@@ -215,5 +243,58 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
             cur = newChild;
         }
         return cur;
+    }
+
+    public Iterator<E> iterator() {
+        final Node root = _rootRef.frozen();
+        return new Iterator<E>() {
+            private int _index;
+            private Node _leaf;
+
+            public boolean hasNext() {
+                return _index < _length;
+            }
+
+            @SuppressWarnings("unchecked")
+            public E next() {
+                if ((_index & BF_MASK) == 0) {
+                    _leaf = readableLeaf(root, _index);
+                }
+                return (E) _leaf.get(_index++ & BF_MASK);
+            }
+
+            public void remove() {
+                throw new UnsupportedOperationException();
+            }
+        };
+    }
+
+    /** Returns a view of this instance as a fixed-size {@link List}.  Reads
+     *  and writes to the list will be propagated to this instance.
+     */ 
+    public List<E> asList() {
+        return new AbstractList<E>() {
+            public E get(final int index) {
+                return SnapReferenceArray.this.get(index);
+            }
+
+            @Override
+            public E set(final int index, final E element) {
+                return SnapReferenceArray.this.getAndSet(index, element);
+            }
+
+            public int size() {
+                return SnapReferenceArray.this.length();
+            }
+
+            @Override
+            public Iterator<E> iterator() {
+                return SnapReferenceArray.this.iterator();
+            }
+        };
+    }
+
+    public String toString() {
+        return asList().toString();
     }
 }
