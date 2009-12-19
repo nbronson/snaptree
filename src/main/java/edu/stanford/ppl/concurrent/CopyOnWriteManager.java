@@ -15,9 +15,10 @@ import java.util.concurrent.locks.AbstractQueuedSynchronizer;
  *  Users should implement the {@link #freezeAndClone(Object)} method.
  */
 abstract public class CopyOnWriteManager<E> {
+    
     /** This is basically a stripped-down CountDownLatch.  Implementing our own
      *  reduces the object count by one, and it gives us access to the
-     *  uninterruptable acquires.
+     *  uninterruptable acquireShared.
      */
     private class Latch extends AbstractQueuedSynchronizer {
         Latch() {
@@ -40,21 +41,19 @@ abstract public class CopyOnWriteManager<E> {
         /** The value used by this epoch. */
         E value;
 
-        /** True iff value was cloned at the beginning of this epoch. */
-        boolean prevIsFrozen;
-
         /** The computed size of <code>value</code>, as of the beginning of
          *  this epoch.
          */
         int initialSize;
 
-        /** If true during onClosed(), the successor epoch will have prevIsFrozen == true. */
-        boolean closeShouldClone;
+        /** True if this epoch is being closed to generate a frozen value. */
+        boolean closeShouldFreeze;
 
-        /** The previous epoch, unless an arrival has been attempted in this
-         *  epoch.
-         */
-        volatile Root cleanPrev = null;
+        /** A frozen E equal to <code>value</code>, if not <code>dirty</code>. */
+        private volatile E _frozenValue;
+
+        /** True if any mutations have been performed on <code>value</code>. */
+        volatile boolean dirty;
 
         /** The epoch that will follow this one.  All of the fields added by
          *  <code>Root</code> may be uninitialized.
@@ -66,38 +65,67 @@ abstract public class CopyOnWriteManager<E> {
          */
         private Latch _closed;
 
-        private Root(final Root cleanPrev) {
-            this.cleanPrev = cleanPrev;
+        private Root() {
         }
 
         public Root(final E value, final int initialSize) {
             this.value = value;
             this.initialSize = initialSize;
-            this.queued = new Root(this);
+            this.queued = new Root();
             this._closed = new Latch();
+            // no frozenValue, so we are considered dirty
+            this.dirty = true;
         }
 
         @Override
         public EpochNode attemptArrive() {
-            if (cleanPrev != null) {
-                cleanPrev = null;
+            final EpochNode ticket = super.attemptArrive();
+            if (ticket != null && !dirty) {
+                dirty = true;
+                _frozenValue = null;
             }
-            return super.attemptArrive();
+            return ticket;
+        }
+
+        private void setFrozenValue(final E v) {
+            if (!dirty) {
+                _frozenValue = v;
+                if (dirty) {
+                    _frozenValue = null;
+                }
+            }
+        }
+
+        private E getFrozenValue() {
+            final E v = _frozenValue;
+            return dirty ? null : v;
         }
 
         protected void onClosed(final int dataSum) {
-            queued.queued = new Root(queued);
-            if (closeShouldClone) {
+            assert(dataSum == 0 || dirty);
+
+            queued.queued = new Root();
+            if (closeShouldFreeze) {
                 queued.value = freezeAndClone(value);
-                queued.prevIsFrozen = true;
+                queued.setFrozenValue(value);
             }
             else {
-                // must just be a size() request
                 queued.value = value;
+
+                // Since we're not actually copying, any mutations in this
+                // epoch dirty the next one.
+                if (dirty) {
+                    queued.dirty = true;
+                }
+                else {
+                    queued.setFrozenValue(_frozenValue);
+                }
             }
             queued.initialSize = initialSize + dataSum;
             queued._closed = new Latch();
-            cleanPrev = null;
+
+            assert(!dirty || _frozenValue == null);
+
             _active = queued;
             _closed.releaseShared(1);
         }
@@ -176,13 +204,13 @@ abstract public class CopyOnWriteManager<E> {
      *  the same instance.
      */
     public E frozen() {
-        final Root a = _active;
-        final Root cp = a.cleanPrev;
-        if (cp != null && a.prevIsFrozen) {
-            return cp.value;
+        Root a = _active;
+        final E f = a.getFrozenValue();
+        if (f != null) {
+            return f;
         }
         else {
-            a.closeShouldClone = true;
+            a.closeShouldFreeze = true;
             a.beginClose();
             a.awaitClosed();
             return a.value;
@@ -209,14 +237,10 @@ abstract public class CopyOnWriteManager<E> {
             return a.initialSize + delta;
         }
         else {
-            // no use in checking cleanPrev, because we would have been able
-            // to read the data sum without closing in that case
-            a.closeShouldClone = true;
+            a.closeShouldFreeze = true;
             a.beginClose();
             a.awaitClosed();
-            // if _active is newer than a.queued, then we just linearize at
-            // the close of _active's predecessor
-            return _active.initialSize;
+            return a.queued.initialSize;
         }
     }
 }
