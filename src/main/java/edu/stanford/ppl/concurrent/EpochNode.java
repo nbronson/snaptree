@@ -44,7 +44,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
         assert(!isChildClosed(state, which));
         return withDataDelta(state | childClosedBit(which), dataSum(childState));
     }
-    private static boolean isAnyChildNotClosed(long state) { return (state & ALL_CHILDREN_CLOSED) != ALL_CHILDREN_CLOSED; }
+    private static boolean isAllChildrenClosed(long state) { return (state & ALL_CHILDREN_CLOSED) == ALL_CHILDREN_CLOSED; }
 
     private static final int CHILD_PRESENT_SHIFT = CHILD_CLOSED_SHIFT - BF;
     private static final long ANY_CHILD_PRESENT = ((1L << BF) - 1L) << CHILD_PRESENT_SHIFT;
@@ -309,7 +309,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
             // every child that is not present will be recorded as closed by withMarked
             final long after = withMarked(state);
             if (compareAndSet(state, after)) {
-                if (!isAnyChildNotClosed(after)) {
+                if (isAllChildrenClosed(after)) {
                     if (isClosed(after) && _parent == null) {
                         // finished in one CAS, yeah!
                         onClosed(dataSum(after));
@@ -343,7 +343,10 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
                     }
                 }
             }
-            if (before == after || compareAndSet(before, after)) {
+            if (before == after) {
+                return;
+            }
+            if (compareAndSet(before, after)) {
                 if (isClosed(after) && _parent == null) {
                     onClosed(dataSum(after));
                 }
@@ -359,7 +362,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
      */
     public Integer attemptDataSum() {
         final long state = get();
-        if (!isAnyChildPresent(state)) {
+        if (!isAnyChildPresent(state) && entryCount(state) == 0) {
             // this is better than Integer.valueOf for dynamic escape analysis
             //return new Integer(dataSum(state));
             // this is better than new Integer() for object creation
