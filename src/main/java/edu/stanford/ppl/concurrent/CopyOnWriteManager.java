@@ -3,7 +3,6 @@
 // CopyOnWriteManager
 package edu.stanford.ppl.concurrent;
 
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 
 /** Manages copy-on-write behavior for a concurrent tree structure.  It is
@@ -13,7 +12,7 @@ import java.util.concurrent.locks.AbstractQueuedSynchronizer;
  *  highly concurrent fashion, the <code>CopyOnWriteManager</code> also manages
  *  a running total that represents the size of the contained tree structure.
  *  <p>
- *  Users must implement the {@link #freezeAndClone(Object, boolean)} method.
+ *  Users should implement the {@link #freezeAndClone(Object)} method.
  */
 abstract public class CopyOnWriteManager<E> {
     /** This is basically a stripped-down CountDownLatch.  Implementing our own
@@ -199,10 +198,9 @@ abstract public class CopyOnWriteManager<E> {
 
     /** Returns the sum of the <code>initialSize</code> parameter passed to the
      *  constructor, and the size deltas passed to {@link Epoch.Ticket#leave}
-     *  for all of the mutation tickets.  This method returns a linearizable
-     *  result, which means that under most conditions it must quiesce pending
-     *  mutations.  It does not, however, require any copy-on-write of the tree
-     *  itself.
+     *  for all of the mutation tickets.  The result returned is linearizable
+     *  with mutations, which requires mutation to be quiesced.  No tree freeze
+     *  is required, however.
      */
     public int size() {
         final Root a = _active;
@@ -213,6 +211,7 @@ abstract public class CopyOnWriteManager<E> {
         else {
             // no use in checking cleanPrev, because we would have been able
             // to read the data sum without closing in that case
+            a.closeShouldClone = true;
             a.beginClose();
             a.awaitClosed();
             // if _active is newer than a.queued, then we just linearize at
