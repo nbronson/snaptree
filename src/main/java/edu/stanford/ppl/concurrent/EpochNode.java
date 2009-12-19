@@ -13,8 +13,9 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private static final int CLOSER_HEAD_START = 1000;
 
     /** This includes the root.  3 or fewer procs gets 2, 15 or fewer gets
-     *  3, 63 or fewer 4, 255 or fewer 5, ...
-     *  TODO: evaluate the best choice here
+     *  3, 63 or fewer 4, 255 or fewer 5.  We observe that the node count
+     *  reported by {@link #computeSpread} is roughly twice the number of
+     *  hardware contexts in use.
      */
     private static final int MAX_LEVELS = 2 + log4(Runtime.getRuntime().availableProcessors());
 
@@ -369,6 +370,24 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
                 }
                 return;
             }
+        }
+    }
+
+    /** If possible returns the <code>dataSum</code> that would be delivered
+     *  to {@link #onClosed(int)} if this epoch were closed at this moment,
+     *  otherwise returns null.  This will succeed if and only if the tree
+     *  consists only of a single node.
+     */
+    public Integer attemptDataSum() {
+        final long state = get();
+        if (!isAnyChildPresent(state)) {
+            // this is better than Integer.valueOf for dynamic escape analysis
+            //return new Integer(dataSum(state));
+            // this is better than new Integer() for object creation
+            return Integer.valueOf(dataSum(state));
+        }
+        else {
+            return null;
         }
     }
 
