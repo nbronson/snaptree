@@ -4,15 +4,39 @@
 package edu.stanford.ppl.concurrent;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 
 /** Manages copy-on-write behavior for a concurrent tree structure.  It is
  *  assumed that the managed structure allows concurrent mutation, but that no
  *  mutating operations may be active when a copy-on-write snapshot of tree is
  *  taken.  Because it is difficult to update the size of data structure in a
  *  highly concurrent fashion, the <code>CopyOnWriteManager</code> also manages
- *  a running total that represents the size of the contained tree.
+ *  a running total that represents the size of the contained tree structure.
+ *  <p>
+ *  Users must implement the {@link #freezeAndClone(Object, boolean)} method.
  */
 abstract public class CopyOnWriteManager<E> {
+    /** This is basically a stripped-down CountDownLatch.  Implementing our own
+     *  reduces the object count by one, and it gives us access to the
+     *  uninterruptable acquires.
+     */
+    private class Latch extends AbstractQueuedSynchronizer {
+        Latch() {
+            setState(1);
+        }
+
+        public int tryAcquireShared(final int acquires) {
+            // 1 = success, and followers may also succeed
+            // -1 = failure
+            return getState() == 0 ? 1 : -1;
+        }
+
+        public boolean tryReleaseShared(final int releases) {
+            // Before, state is either 0 or 1.  After, state is always 0.
+            return compareAndSetState(1, 0);
+        }
+    }
+
     private class Root extends EpochNode {
         /** The value used by this epoch. */
         E value;
@@ -41,7 +65,7 @@ abstract public class CopyOnWriteManager<E> {
         /** A latch that will be triggered when this epoch has completed its
          *  shutdown and installed <code>queued</code> as the active epoch.
          */
-        private CountDownLatch _closed;
+        private Latch _closed;
 
         private Root(final Root cleanPrev) {
             this.cleanPrev = cleanPrev;
@@ -51,7 +75,7 @@ abstract public class CopyOnWriteManager<E> {
             this.value = value;
             this.initialSize = initialSize;
             this.queued = new Root(this);
-            this._closed = new CountDownLatch(1);
+            this._closed = new Latch();
         }
 
         @Override
@@ -73,37 +97,45 @@ abstract public class CopyOnWriteManager<E> {
                 queued.value = value;
             }
             queued.initialSize = initialSize + dataSum;
-            queued._closed = new CountDownLatch(1);
+            queued._closed = new Latch();
             cleanPrev = null;
             _active = queued;
-            _closed.countDown();
+            _closed.releaseShared(1);
         }
 
         public void awaitClosed() {
-            boolean interrupted = false;
-            while (true) {
-                try {
-                    _closed.await();
-                    break;
-                }
-                catch (final InterruptedException xx) {
-                    interrupted = true;
-                }
-            }
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
+            _closed.acquireShared(1);
         }
     }
 
     private volatile Root _active;
 
+    /** Creates a new {@link CopyOnWriteManager} holding
+     *  <code>initialValue</code>, with an assumed size of
+     *  <code>initialSize</code>.
+     */
     public CopyOnWriteManager(final E initialValue, final int initialSize) {
         _active = new Root(initialValue, initialSize);
     }
 
     abstract protected E freezeAndClone(final E value, final boolean alreadyFrozen);
 
+    /** Returns a reference to the tree structure suitable for a read
+     *  operation.  The returned structure may be mutated by operations that
+     *  have the permission of this {@link CopyOnWriteManager}, but they will
+     *  not observe changes managed by other instances.
+     */
+    public E read() {
+        return _active.value;
+    }
+
+    /** Obtains permission to mutate the copy-on-write value held by this
+     *  instance, perhaps blocking while a concurrent snapshot is being
+     *  performed.  {@link Epoch.Ticket#leave} must be called exactly once on
+     *  the object returned from this method, after the mutation has been
+     *  completed.  The change in size reflected by the mutation should be
+     *  passed as the parameter to <code>leave</code>.
+     */
     public Epoch.Ticket beginMutation() {
         while (true) {
             final Root a = _active;
@@ -125,14 +157,21 @@ abstract public class CopyOnWriteManager<E> {
         }        
     }
 
-    public E read() {
-        return _active.value;
-    }
-
+    /** Returns a reference to the tree structure suitable for a mutating
+     *  operation.  This method may only be called under the protection of a
+     *  ticket returned from {@link #beginMutation}.
+     */
     public E mutable() {
         return _active.value;
     }
 
+    /** Returns a reference to a snapshot of this instance's tree structure
+     *  that may be read, but not written.  This is accomplished by suspending
+     *  mutation, replacing the mutable root of this manager with the result of
+     *  <code>freezeAndClone(root, false)</code>, and then returning a
+     *  reference to the old root.  Successive calls to this method may return
+     *  the same instance.
+     */
     public E frozen() {
         final Root a = _active;
         final Root cp = a.cleanPrev;
@@ -147,16 +186,30 @@ abstract public class CopyOnWriteManager<E> {
         }
     }
 
+    /** Returns a reference to a snapshot of this instance's tree structure
+     *  that has been prepared for copy-on-write.  This is like the reference
+     *  returned from {@link #frozen}, except that while the bulk of the tree
+     *  is shared using copy-on-write, the root returned from this method is
+     *  not in use elsewhere.
+     */
     public E cloned() {
         return freezeAndClone(frozen(), true);
     }
 
+    /** Returns true if the computed {@link #size} is zero. */
     public boolean isEmpty() {
         // for a different internal implementation (such as a C-SNZI) we might
         // be able to do better than this
         return size() == 0;
     }
 
+    /** Returns the sum of the <code>initialSize</code> parameter passed to the
+     *  constructor, and the size deltas passed to {@link Epoch.Ticket#leave}
+     *  for all of the mutation tickets.  This method returns a linearizable
+     *  result, which means that under most conditions it must quiesce pending
+     *  mutations.  It does not, however, require any copy-on-write of the tree
+     *  itself.
+     */
     public int size() {
         final Root a = _active;
         final Integer delta = a.attemptDataSum();
