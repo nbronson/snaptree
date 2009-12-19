@@ -26,59 +26,54 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
 
     //////////////// branching factor
 
-    private static final int LOG_BF = 2;
+    private static final int LOG_BF = 3;
     private static final int BF = 1 << LOG_BF;
     private static final int BF_MASK = BF - 1;
 
     //////////////// bit packing
 
-    private static final int ENTRY_COUNT_BITS = 20;
-    private static final int ENTRY_COUNT_MASK = (1 << ENTRY_COUNT_BITS) - 1;
-
-    private static int entryCount(long state) { return ((int) state) & ENTRY_COUNT_MASK; }
-    private static boolean willOverflow(long state) { return entryCount(state) == ENTRY_COUNT_MASK; }
-
     private static final int DATA_SUM_SHIFT = 32;
     private static int dataSum(long state) { return (int)(state >> DATA_SUM_SHIFT); }
     private static long withDataDelta(long state, int delta) { return state + (((long) delta) << DATA_SUM_SHIFT); }
 
-    private static final long CLOSING = (1L << 21);
-    private static boolean isClosing(long state) { return (state & CLOSING) != 0L; }
-    private static long withClosing(long state) { return state | CLOSING; }
+    private static final int CHILD_CLOSED_SHIFT = 32 - BF;
+    private static long ALL_CHILDREN_CLOSED = ((1L << BF) - 1L) << CHILD_CLOSED_SHIFT;
+    private static long childClosedBit(int which) { return 1L << (CHILD_CLOSED_SHIFT + which); }
+    private static boolean isChildClosed(long state, int which) { return (state & childClosedBit(which)) != 0; }
+    private static long withChildClosed(long state, int which, long childState) {
+        assert(!isChildClosed(state, which));
+        return withDataDelta(state | childClosedBit(which), dataSum(childState));
+    }
+    private static boolean isAnyChildNotClosed(long state) { return (state & ALL_CHILDREN_CLOSED) != ALL_CHILDREN_CLOSED; }
 
-    private static final long CLOSED = (1L << 22);
-    private static boolean isClosed(long state) { return (state & CLOSED) != 0L; }
-    private static long withClosed(long state) { return state | CLOSED; }
-
-    private static final long EMPTY = (1L << 23);
-    private static boolean isEmpty(long state) { return (state & EMPTY) != 0L; }
-    private static long withEmpty(long state) { return state | EMPTY; }
-
-    private static final int CHILD_PRESENT_SHIFT = 24;
+    private static final int CHILD_PRESENT_SHIFT = CHILD_CLOSED_SHIFT - BF;
     private static final long ANY_CHILD_PRESENT = ((1L << BF) - 1L) << CHILD_PRESENT_SHIFT;
     private static long childPresentBit(int which) { return 1L << (CHILD_PRESENT_SHIFT + which); }
-    private static boolean isAnyChildPresent(long state) { return (state & ANY_CHILD_PRESENT) != 0; }
     private static boolean isChildPresent(long state, int which) { return (state & childPresentBit(which)) != 0; }
     private static long withChildPresent(long state, int which) { return state | childPresentBit(which); }
+    private static boolean isAnyChildPresent(long state) { return (state & ANY_CHILD_PRESENT) != 0; }
 
-    private static final int CHILD_EMPTY_SHIFT = 28;
-    private static long ANY_CHILD_EMPTY = ((1L << BF) - 1L) << CHILD_EMPTY_SHIFT;
-    private static long childEmptyBit(int which) { return 1L << (CHILD_EMPTY_SHIFT + which); }
-    private static boolean isChildEmpty(long state, int which) { return (state & childEmptyBit(which)) != 0; }
-    private static long withChildEmpty(long state, int which, long childState) {
-        assert(!isChildEmpty(state, which));
-        return withDataDelta(state | childEmptyBit(which), dataSum(childState));
+    private static final long MARK = (1L << (CHILD_PRESENT_SHIFT - 1));
+    private static boolean isMarked(long state) { return (state & MARK) != 0L; }    
+    /** Records all non-present children as closed. */
+    private static long withMarked(long state) {
+        final int missingChildren = (~((int) state) >> CHILD_PRESENT_SHIFT) & ((1 << BF) - 1);
+        return state | MARK | (((long) missingChildren) << CHILD_CLOSED_SHIFT);
     }
-    private static long withAllChildrenEmpty(long state) { return state | ANY_CHILD_EMPTY; }
 
-    private static final long READY_FOR_EMPTY_MASK = ANY_CHILD_EMPTY | CLOSED | ENTRY_COUNT_MASK;
-    private static final long READY_FOR_EMPTY_EXPECTED = ANY_CHILD_EMPTY | CLOSED;
-    private static boolean readyForEmpty(long state) { return (state & READY_FOR_EMPTY_MASK) == READY_FOR_EMPTY_EXPECTED; }
-    private static long recomputeEmpty(long state) { return readyForEmpty(state) ? withEmpty(state) : state; }
+    private static final long ENTRY_COUNT_MASK = MARK - 1;
+    private static int entryCount(long state) { return (int) (state & ENTRY_COUNT_MASK); }
+    private static long withArrive(long state) { return state + 1; }
+    private static long withLeave(long state, int dataDelta) { return withDataDelta(state - 1, dataDelta); } 
+    private static boolean mayArrive(long state) { return entryCount(state) != ENTRY_COUNT_MASK; }
+    private static boolean mayLeave(long state) { return entryCount(state) != 0; }
 
-    private static final long ENTRY_FAST_PATH_MASK = ANY_CHILD_PRESENT | CLOSING | (1L << (ENTRY_COUNT_BITS - 1));
+    private static final long CLOSED_MASK = MARK | ALL_CHILDREN_CLOSED | ENTRY_COUNT_MASK;
+    private static final long CLOSED_VALUE = MARK | ALL_CHILDREN_CLOSED;
+    private static boolean isClosed(long state) { return (state & CLOSED_MASK) == CLOSED_VALUE; }
 
-    /** Not closed, no children, and no overflow possible. */
+    private static final long ENTRY_FAST_PATH_MASK = ANY_CHILD_PRESENT | MARK | (ENTRY_COUNT_MASK - (ENTRY_COUNT_MASK >> 1));
+    /** Not marked, no children, and no overflow possible. */
     private static boolean isEntryFastPath(long state) { return (state & ENTRY_FAST_PATH_MASK) == 0L; }
 
     //////////////// subclasses
@@ -99,7 +94,11 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
         AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child0"),
         AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child1"),
         AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child2"),
-        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child3")
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child3"),
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child4"),
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child5"),
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child6"),
+        AtomicReferenceFieldUpdater.newUpdater(EpochNode.class, EpochNode.class, "_child7")
     };
 
     private final EpochNode _parent;
@@ -117,11 +116,10 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private volatile EpochNode _child1;
     private volatile EpochNode _child2;
     private volatile EpochNode _child3;
-
-    // this gets us to 64 bytes on 32-bit JVMs, a common cache line size
-    long _padding0;
-    long _padding1;
-    long _padding2;
+    private volatile EpochNode _child4;
+    private volatile EpochNode _child5;
+    private volatile EpochNode _child6;
+    private volatile EpochNode _child7;
 
     EpochNode() {
         _parent = null;
@@ -144,7 +142,12 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
             case 0: return _child0;
             case 1: return _child1;
             case 2: return _child2;
-            default: return _child3;
+            case 3: return _child3;
+            case 4: return _child4;
+            case 5: return _child5;
+            case 6: return _child6;
+            case 7: return _child7;
+            default: return null;
         }
     }
 
@@ -170,7 +173,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     private EpochNode createChild(final int which) {
         while (true) {
             final long state = get();
-            if (isClosing(state)) {
+            if (isMarked(state)) {
                 // whatever we've got is what we've got
                 return getChild(state, which);
             }
@@ -187,7 +190,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
      */
     public EpochNode attemptArrive() {
         final long state = get();
-        if (isEntryFastPath(state) && compareAndSet(state, state + 1)) {
+        if (isEntryFastPath(state) && compareAndSet(state, withArrive(state))) {
             return this;
         }
         else {
@@ -208,7 +211,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
         int tries = 0;
         while (true) {
             final long state = get();
-            if (isClosing(state)) {
+            if (isMarked(state)) {
                 return null;
             }
             if (isAnyChildPresent(state) ||
@@ -225,10 +228,10 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
                 }
                 return child.attemptArrive(id >> LOG_BF, level + 1);
             }
-            if (willOverflow(state)) {
-                throw new IllegalStateException("maximum ref count of " + ENTRY_COUNT_MASK + " exceeded");
+            if (!mayArrive(state)) {
+                throw new IllegalStateException("maximum arrival count of " + ENTRY_COUNT_MASK + " exceeded");
             }
-            if (compareAndSet(state, state + 1)) {
+            if (compareAndSet(state, withArrive(state))) {
                 // success
                 return this;
             }
@@ -241,23 +244,23 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
     public void leave(final int dataDelta) {
         while (true) {
             final long state = get();
-            if (entryCount(state) == 0) {
-                throw new IllegalStateException("incorrect call to Node.decr()");
+            if (!mayLeave(state)) {
+                throw new IllegalStateException("incorrect call to Epoch.leave");
             }
-            final long after = recomputeEmpty(withDataDelta(state - 1, dataDelta));
+            final long after = withLeave(state, dataDelta);
             if (compareAndSet(state, after)) {
-                if (isEmpty(after)) {
-                    newlyEmpty(after);
+                if (isClosed(after)) {
+                    newlyClosed(after);
                 }
                 return;
             }
         }
     }
 
-    private void newlyEmpty(final long state) {
+    private void newlyClosed(final long state) {
         if (_parent != null) {
             // propogate
-            _parent.childIsNowEmpty(_whichInParent, state);
+            _parent.childIsNowClosed(_whichInParent, state);
         }
         else {
             // report
@@ -265,17 +268,17 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
         }
     }
 
-    private void childIsNowEmpty(final int which, final long childState) {
+    private void childIsNowClosed(final int which, final long childState) {
         while (true) {
             final long state = get();
-            if (isChildEmpty(state, which)) {
+            if (isChildClosed(state, which)) {
                 // not our problem
                 return;
             }
-            final long after = recomputeEmpty(withChildEmpty(state, which, childState));
+            final long after = withChildClosed(state, which, childState);
             if (compareAndSet(state, after)) {
-                if (isEmpty(after)) {
-                    newlyEmpty(after);
+                if (isClosed(after)) {
+                    newlyClosed(after);
                 }
                 return;
             }
@@ -294,7 +297,7 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
                 return;
             }
 
-            if (isClosing(state)) {
+            if (isMarked(state)) {
                 // give the thread that actually performed this transition a
                 // bit of a head start
                 if (attempts < CLOSER_HEAD_START) {
@@ -303,34 +306,23 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
                 break;
             }
 
-            if (!isAnyChildPresent(state)) {
-                if (entryCount(state) == 0) {
-                    // we can transition directly to the empty state
-                    final long after = withEmpty(withClosed(withAllChildrenEmpty(withClosing(state))));
-                    if (compareAndSet(state, after)) {
-                        if (_parent == null) {
-                            onClosed(dataSum(after));
-                        }
-                        return;
+            // every child that is not present will be recorded as closed by withMarked
+            final long after = withMarked(state);
+            if (compareAndSet(state, after)) {
+                if (!isAnyChildNotClosed(after)) {
+                    if (isClosed(after) && _parent == null) {
+                        // finished in one CAS, yeah!
+                        onClosed(dataSum(after));
                     }
+                    // no second stage necessary
+                    return;
                 }
-                else {
-                    // we can transition directly to the closed state
-                    final long after = withClosed(withAllChildrenEmpty(withClosing(state)));
-                    if (compareAndSet(state, after)) {
-                        return;
-                    }
-                }
-            }
-
-            // closing is needed while we go mark the children
-            if (compareAndSet(state, withClosing(state))) {
+                // CAS successful, so now we need to beginClose() the children
                 break;
             }
         }
 
-        // no new child bits can be set after closing, so this will be
-        // exhaustive
+        // no new child bits can be set after marking, so this gets everyone
         for (int which = 0; which < BF; ++which) {
             final EpochNode child = getChild(state, which);
             if (child != null) {
@@ -338,34 +330,21 @@ abstract class EpochNode extends AtomicLong implements Epoch.Ticket {
             }
         }
 
+        // Rather than have each child bubble up its closure, we gather it
+        // here to reduce the number of CASs required.
         while (true) {
             final long before = get();
-            if (isClosed(before)) {
-                return;
-            }
-
-            // We know all of the children are closed because we did it
-            // ourself.  Check each one for empty, and if so set the
-            // corresponding bit in our state while we merge in the dataSum.
-            long after = withClosed(before);
+            long after = before;
             for (int which = 0; which < BF; ++which) {
-                if (!isChildEmpty(before, which)) {
-                    if (isChildPresent(before, which)) {
-                        final long childState = getChildFromField(which).get();
-                        if (isEmpty(childState)) {
-                            after = withChildEmpty(after, which, childState);
-                        }
-                    }
-                    else {
-                        // non-existent children are empty
-                        after = withChildEmpty(after, which, 0L);
+                if (!isChildClosed(before, which)) {
+                    final long childState = getChildFromField(which).get();
+                    if (isClosed(childState)) {
+                        after = withChildClosed(after, which, childState);
                     }
                 }
             }
-            after = recomputeEmpty(after);
-
-            if (compareAndSet(before, after)) {
-                if (_parent == null && isEmpty(after)) {
+            if (before == after || compareAndSet(before, after)) {
+                if (isClosed(after) && _parent == null) {
                     onClosed(dataSum(after));
                 }
                 return;
