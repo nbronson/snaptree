@@ -54,7 +54,7 @@ public class SnapFixedList<E> extends AbstractList<E> implements Cloneable {
             super(initialValue, 0);
         }
 
-        protected Node freezeAndClone(final Node value, final boolean alreadyFrozen) {
+        protected Node freezeAndClone(final Node value) {
             return new Node(new Generation(), value);
         }
     }

@@ -89,7 +89,7 @@ abstract public class CopyOnWriteManager<E> {
         protected void onClosed(final int dataSum) {
             queued.queued = new Root(queued);
             if (closeShouldClone) {
-                queued.value = freezeAndClone(value, false);
+                queued.value = freezeAndClone(value);
                 queued.prevIsFrozen = true;
             }
             else {
@@ -118,7 +118,11 @@ abstract public class CopyOnWriteManager<E> {
         _active = new Root(initialValue, initialSize);
     }
 
-    abstract protected E freezeAndClone(final E value, final boolean alreadyFrozen);
+    /** The implementing method must mark <code>value</code> as shared, and
+     *  return a new object to use in its place.  Hopefully, the majority of
+     *  the work of the clone can be deferred by copy-on-write. 
+     */
+    abstract protected E freezeAndClone(final E value);
 
     /** Returns a reference to the tree structure suitable for a read
      *  operation.  The returned structure may be mutated by operations that
@@ -184,16 +188,6 @@ abstract public class CopyOnWriteManager<E> {
             a.awaitClosed();
             return a.value;
         }
-    }
-
-    /** Returns a reference to a snapshot of this instance's tree structure
-     *  that has been prepared for copy-on-write.  This is like the reference
-     *  returned from {@link #frozen}, except that while the bulk of the tree
-     *  is shared using copy-on-write, the root returned from this method is
-     *  not in use elsewhere.
-     */
-    public E cloned() {
-        return freezeAndClone(frozen(), true);
     }
 
     /** Returns true if the computed {@link #size} is zero. */
