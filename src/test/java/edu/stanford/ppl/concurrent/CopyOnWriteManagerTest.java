@@ -5,18 +5,27 @@ package edu.stanford.ppl.concurrent;
 
 import junit.framework.TestCase;
 
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class CopyOnWriteManagerTest extends TestCase {
-    static class Obj {
+    static class Payload {
         private final AtomicLong _state;
 
-        public Obj(final int value) {
+        public Payload(final int value) {
             _state = new AtomicLong(((long) value) << 32);
         }
 
         boolean isShared() { return (_state.get() & 1L) != 0L; }
-        void markShared() { _state.getAndAdd(1L); }
+        void markShared() {
+            while (true) {
+                final long s = _state.get();
+                if ((s & 1L) != 0L || _state.compareAndSet(s, s | 1L)) {
+                    return; 
+                }
+            }
+        }
+
         int size() { return (int) (_state.get() >> 32); }
         void incr() { adjust(1); }
         void decr() { adjust(-1); }
@@ -32,14 +41,14 @@ public class CopyOnWriteManagerTest extends TestCase {
         }
     }
 
-    static class COWM extends CopyOnWriteManager<Obj> {
+    static class COWM extends CopyOnWriteManager<Payload> {
         COWM(final int initialSize) {
-            super(new Obj(initialSize), initialSize);
+            super(new Payload(initialSize), initialSize);
         }
 
-        protected Obj freezeAndClone(final Obj value) {
+        protected Payload freezeAndClone(final Payload value) {
             value.markShared();
-            return new Obj(value.size());
+            return new Payload(value.size());
         }
     }
 
@@ -76,12 +85,55 @@ public class CopyOnWriteManagerTest extends TestCase {
 
     public void testSnapshot() {
         final COWM m = new COWM(10);
-        final Obj s10 = m.frozen();
+        final Payload s10 = m.frozen();
         incr(m);
-        final Obj s11 = m.frozen();
+        final Payload s11 = m.frozen();
         incr(m);
         assertEquals(10, s10.size());
         assertEquals(11, s11.size());
         assertEquals(12, m.read().size());
+    }
+
+    public void testParallel() {
+        doParallel(1, 1000000);
+        doParallel(2, 1000000);
+        doParallel(4, 1000000);
+    }
+
+    void doParallel(final int numThreads, final int opsPerThread) {
+        final COWM m = new COWM(0);
+        final long elapsed = ParUtil.timeParallel(numThreads, new Runnable() {
+            public void run() {
+                final Random rand = new Random();
+                for (int i = 0; i < opsPerThread; ++i) {
+                    final int pct = rand.nextInt(100);
+                    if (pct < 1) {
+                        final Payload snap = m.frozen();
+                        assertTrue(snap.isShared());
+                        assertTrue(snap.size() <= m.read().size());
+                    }
+                    else if (pct < 2) {
+                        final int s0 = m.read().size();
+                        final int s1 = m.size();
+                        final int s2 = m.read().size();
+                        if (s0 > s1) {
+                            assertTrue(s0 <= s1);
+                        }
+                        if (s1 > s2) {
+                            assertTrue(s1 <= s2);
+                        }
+                    }
+                    else if (pct < 20) {
+                        m.read();
+                    }
+                    else {
+                        incr(m);
+                    }
+                }
+            }
+        });
+        System.out.println("numThreads " + numThreads + "    opsPerThread " + opsPerThread + "    " +
+                "elapsedMillis " + elapsed + "    " +
+                "opsPerSec " + (numThreads * 1000L * opsPerThread / elapsed));
     }
 }

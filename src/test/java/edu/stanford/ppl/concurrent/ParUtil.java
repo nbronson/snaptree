@@ -90,12 +90,16 @@ public class ParUtil {
                 catch (final Exception xx) {
                     throw new RuntimeException("unexpected", xx);
                 }
-                block.call(index);
                 try {
-                    barrier.await();
+                    block.call(index);
                 }
-                catch (final Exception xx) {
-                    throw new RuntimeException("unexpected", xx);
+                finally {
+                    try {
+                        barrier.await();
+                    }
+                    catch (final Exception xx) {
+                        throw new RuntimeException("unexpected", xx);
+                    }
                 }
             }
         });
