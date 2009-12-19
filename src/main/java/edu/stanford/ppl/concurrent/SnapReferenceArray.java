@@ -294,6 +294,7 @@ public class SnapReferenceArray<E> implements Iterable<E>, Cloneable {
         };
     }
 
+    @Override
     public String toString() {
         return asList().toString();
     }
