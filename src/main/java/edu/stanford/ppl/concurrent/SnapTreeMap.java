@@ -6,7 +6,6 @@ package edu.stanford.ppl.concurrent;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V>, Cloneable {
 
@@ -22,10 +21,10 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
 
     /** The number of spins before yielding. */
-    static final int SpinCount = Integer.parseInt(System.getProperty("spin", "100"));
+    static final int SpinCount = Integer.parseInt(System.getProperty("snaptree.spin", "100"));
 
     /** The number of yields before blocking. */
-    static final int YieldCount = Integer.parseInt(System.getProperty("yield", "0"));
+    static final int YieldCount = Integer.parseInt(System.getProperty("snaptree.yield", "0"));
 
     
     // we encode directions as characters
@@ -202,16 +201,31 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     private static class RootHolder<K,V> extends Node<K,V> {
-        final StripedSizedEpoch epoch;
-
         RootHolder() {
             super(null, 1, null, null, 0L, null, null);
-            epoch = new StripedSizedEpoch(0);
         }
 
         RootHolder(final RootHolder<K,V> snapshot) {
             super(null, 1 + snapshot.height, null, null, 0L, null, snapshot.right);
-            epoch = new StripedSizedEpoch(snapshot.epoch.size());
+        }
+    }
+
+    private static class COWMgr<K,V> extends CopyOnWriteManager<RootHolder<K,V>> {
+        COWMgr() {
+            super(new RootHolder<K,V>(), 0);
+        }
+
+        COWMgr(final RootHolder<K,V> initialValue, final int initialSize) {
+            super(initialValue, initialSize);
+        }
+
+        protected RootHolder<K,V> freezeAndClone(final RootHolder<K,V> value) {
+            Node.markShared(value.right);
+            return new RootHolder(value); 
+        }
+
+        protected RootHolder<K, V> cloneFrozen(final RootHolder<K, V> frozenValue) {
+            return new RootHolder(frozenValue);
         }
     }
 
@@ -234,54 +248,48 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     //////////////// state
 
     private Comparator<? super K> comparator;
-    private AtomicReference<RootHolder<K,V>> holderRef
-            = new AtomicReference<RootHolder<K,V>>(new RootHolder<K,V>());
-    private final EntrySet entries = new EntrySet();
+    private volatile COWMgr<K,V> holderRef;
 
     //////////////// public interface
 
     public SnapTreeMap() {
+        this(null);
     }
 
     public SnapTreeMap(final Comparator<? super K> comparator) {
         this.comparator = comparator;
+        this.holderRef = new COWMgr<K,V>();
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public SnapTreeMap<K,V> clone() {
-        final SnapTreeMap<K,V> m;
+        final SnapTreeMap<K,V> copy;
         try {
-            m = (SnapTreeMap<K,V>) super.clone();
+            copy = (SnapTreeMap<K,V>) super.clone();
         } catch (final CloneNotSupportedException xx) {
             throw new InternalError();
         }
-        m.comparator = comparator;
-        m.holderRef = new AtomicReference<RootHolder<K,V>>(new RootHolder<K,V>(completedHolder()));
-        return m;
-    }
-
-    private RootHolder<K,V> completedHolder() {
-        final RootHolder<K,V> h = holderRef.get();
-        h.epoch.shutdown();
-        return h;
+        assert(copy.comparator == comparator);
+        copy.holderRef = (COWMgr<K,V>) holderRef.clone();
+        return copy;
     }
 
     @Override
     public int size() {
-        return completedHolder().epoch.size();
+        return holderRef.size();
     }
 
     @Override
     public boolean isEmpty() {
         // removed-but-not-unlinked nodes cannot be leaves, so if the tree is
         // truly empty then the root holder has no right child
-        return holderRef.get().right == null;
+        return holderRef.read().right == null;
     }
 
     @Override
     public void clear() {
-        holderRef.set(new RootHolder<K,V>());
+        holderRef = new COWMgr<K,V>();
     }
 
     public Comparator<? super K> comparator() {
@@ -321,7 +329,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         final Comparable<? super K> k = comparable(key);
         
         while (true) {
-            final Node<K,V> right = holderRef.get().right;
+            final Node<K,V> right = holderRef.read().right;
             if (right == null) {
                 return null;
             } else {
@@ -335,7 +343,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                 if (isShrinkingOrUnlinked(ovl)) {
                     right.waitUntilShrinkCompleted(ovl);
                     // RETRY
-                } else if (right == holderRef.get().right) {
+                } else if (right == holderRef.read().right) {
                     // the reread of .right is the one protected by our read of ovl
                     final Object vo = attemptGet(k, right, (rightCmp < 0 ? Left : Right), ovl);
                     if (vo != SpecialRetry) {
@@ -434,7 +442,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     /** Returns a key if returnKey is true, a SimpleImmutableEntry otherwise. */
     private Object extreme(final boolean returnKey, final char dir) {
         while (true) {
-            final Node<K,V> right = holderRef.get().right;
+            final Node<K,V> right = holderRef.read().right;
             if (right == null) {
                 throw new NoSuchElementException();
             } else {
@@ -442,7 +450,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                 if (isShrinkingOrUnlinked(ovl)) {
                     right.waitUntilShrinkCompleted(ovl);
                     // RETRY
-                } else if (right == holderRef.get().right) {
+                } else if (right == holderRef.read().right) {
                     // the reread of .right is the one protected by our read of ovl
                     final Object vo = attemptExtreme(returnKey, dir, right, ovl);
                     if (vo != SpecialRetry) {
@@ -557,29 +565,16 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                           final Object expected,
                           final Object newValue) {
         final Comparable<? super K> k = comparable(key);
-        final int id = Thread.currentThread().hashCode();
-        while (true) {
-            final RootHolder<K,V> h = holderRef.get();
-            if (h.epoch.enter(id)) {
-                int sizeDelta = 0;
-                try {
-                    final Object prev = updateUnderRoot(key, k, func, expected, newValue, h);
-                    if (shouldUpdate(func, prev, expected)) {
-                        sizeDelta = (prev != null ? -1 : 0) + (newValue != null ? 1 : 0);
-                    }
-                    return prev;
-                } finally {
-                    h.epoch.exit(id, sizeDelta);
-                }
+        int sizeDelta = 0;
+        final Epoch.Ticket ticket = holderRef.beginMutation();
+        try {
+            final Object prev = updateUnderRoot(key, k, func, expected, newValue, holderRef.mutable());
+            if (shouldUpdate(func, prev, expected)) {
+                sizeDelta = (prev != null ? -1 : 0) + (newValue != null ? 1 : 0);
             }
-            // Someone is shutting down the epoch.  We can't do anything until
-            // this one is done.  We can take responsibility for creating a new
-            // one, so we pass true as the parameter to awaitShutdown().
-            if (h.epoch.awaitShutdown(true)) {
-                // We're on cleanup duty.  CAS detects a racing clear().
-                Node.markShared(h.right);
-                holderRef.compareAndSet(h, new RootHolder<K,V>(h));
-            }
+            return prev;
+        } finally {
+            ticket.leave(sizeDelta);
         }
     }
 
@@ -868,37 +863,22 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     private Map.Entry<K,V> pollExtremeEntry(final char dir) {
-        final int id = Thread.currentThread().hashCode();
-        while (true) {
-            final RootHolder<K,V> h = holderRef.get();
-            if (h.epoch.enter(id)) {
-                int sizeDelta = 0;
-                try {
-                    final Map.Entry<K,V> prev = pollExtremeEntryUnderRoot(dir);
-                    if (prev != null) {
-                        sizeDelta = -1;
-                    }
-                    return prev;
-                } finally {
-                    h.epoch.exit(id, sizeDelta);
-                }
+        final Epoch.Ticket ticket = holderRef.beginMutation();
+        int sizeDelta = 0;
+        try {
+            final Map.Entry<K,V> prev = pollExtremeEntryUnderRoot(dir, holderRef.mutable());
+            if (prev != null) {
+                sizeDelta = -1;
             }
-            // Someone is shutting down the epoch.  We can't do anything until
-            // this one is done.  We can take responsibility for creating a new
-            // one, so we pass true as the parameter to awaitShutdown().
-            if (h.epoch.awaitShutdown(true)) {
-                // We're on cleanup duty.  CAS detects a racing clear().
-                Node.markShared(h.right);
-                holderRef.compareAndSet(h, new RootHolder<K,V>(h));
-            }
+            return prev;
+        } finally {
+            ticket.leave(sizeDelta);
         }
     }
 
-    private Map.Entry<K,V> pollExtremeEntryUnderRoot(final char dir) {
-        final RootHolder<K,V> h = holderRef.get();
-
+    private Map.Entry<K,V> pollExtremeEntryUnderRoot(final char dir, final RootHolder<K,V> holder) {
         while (true) {
-            final Node<K,V> right = h.unsharedRight();
+            final Node<K,V> right = holder.unsharedRight();
             if (right == null) {
                 // tree is empty, nothing to remove
                 return null;
@@ -907,9 +887,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                 if (isShrinkingOrUnlinked(ovl)) {
                     right.waitUntilShrinkCompleted(ovl);
                     // RETRY
-                } else if (right == h.right) {
+                } else if (right == holder.right) {
                     // this is the protected .right
-                    final Map.Entry<K,V> result = attemptRemoveExtreme(dir, h, right, ovl);
+                    final Map.Entry<K,V> result = attemptRemoveExtreme(dir, holder, right, ovl);
                     if (result != SpecialRetry) {
                         return result;
                     }
@@ -1439,7 +1419,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
     @Override
     public Set<Map.Entry<K,V>> entrySet() {
-        return entries;
+        return new EntrySet();
     }
 
     private class EntrySet extends AbstractSet<Map.Entry<K,V>> {
@@ -1504,7 +1484,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
         @SuppressWarnings("unchecked")
         EntryIter() {
-            final Node<K,V> root = completedHolder().right;
+            final Node<K,V> root = holderRef.frozen().right;
             path = (Node<K,V>[]) new Node[1 + height(root)];
             pushMin(root);
             // min can't be removed, so we don't need to check vOpt

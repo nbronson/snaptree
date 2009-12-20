@@ -61,6 +61,10 @@ public class SnapReferenceArray<E> implements Iterable<E>, Cloneable {
         protected Node freezeAndClone(final Node value) {
             return new Node(value);
         }
+
+        protected Node cloneFrozen(final Node frozenValue) {
+            return new Node(frozenValue);
+        }
     }
 
     /** 0 if _length == 0, otherwise the smallest positive int such that

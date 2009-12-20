@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
  */
 public class SnapDoubleArray implements Iterable<Double>, Cloneable {
 
+    // TODO: clean up the internal implementation
+
     private static final int LOG_BF = 5;
     private static final int BF = 1 << LOG_BF;
     private static final int BF_MASK = BF - 1;
@@ -110,6 +112,10 @@ public class SnapDoubleArray implements Iterable<Double>, Cloneable {
 
         protected Node freezeAndClone(final Node value) {
             return value.clone();
+        }
+
+        protected Node cloneFrozen(final Node frozenValue) {
+            return frozenValue.clone();
         }
     }
 

@@ -50,6 +50,11 @@ public class CopyOnWriteManagerTest extends TestCase {
             value.markShared();
             return new Payload(value.size());
         }
+
+        protected Payload cloneFrozen(final Payload frozenValue) {
+            assertTrue(frozenValue.isShared());
+            return new Payload(frozenValue.size());
+        }
     }
 
     public void testRead() {

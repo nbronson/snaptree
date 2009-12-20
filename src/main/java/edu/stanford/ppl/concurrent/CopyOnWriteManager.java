@@ -12,9 +12,10 @@ import java.util.concurrent.locks.AbstractQueuedSynchronizer;
  *  highly concurrent fashion, the <code>CopyOnWriteManager</code> also manages
  *  a running total that represents the size of the contained tree structure.
  *  <p>
- *  Users should implement the {@link #freezeAndClone(Object)} method.
+ *  Users should implement the {@link #freezeAndClone(Object)} and
+ *  {@link #cloneFrozen(Object)} methods.
  */
-abstract public class CopyOnWriteManager<E> {
+abstract public class CopyOnWriteManager<E> implements Cloneable {
     
     /** This is basically a stripped-down CountDownLatch.  Implementing our own
      *  reduces the object count by one, and it gives us access to the
@@ -151,6 +152,31 @@ abstract public class CopyOnWriteManager<E> {
      */
     abstract protected E freezeAndClone(final E value);
 
+    /** Returns a clone of a frozen E. */
+    abstract protected E cloneFrozen(E frozenValue);
+
+    public CopyOnWriteManager<E> clone() {
+        final CopyOnWriteManager<E> copy;
+        try {
+            copy = (CopyOnWriteManager<E>) super.clone();
+        }
+        catch (final CloneNotSupportedException xx) {
+            throw new Error("unexpected", xx);
+        }
+
+        final Root a = _active;
+        E f = a.getFrozenValue();
+        if (f == null) {
+            a.closeShouldFreeze = true;
+            a.beginClose();
+            a.awaitClosed();
+            f = a.value;
+        }
+
+        copy._active = new Root(cloneFrozen(f), a.initialSize);
+        return copy;
+    }
+
     /** Returns a reference to the tree structure suitable for a read
      *  operation.  The returned structure may be mutated by operations that
      *  have the permission of this {@link CopyOnWriteManager}, but they will
@@ -204,7 +230,7 @@ abstract public class CopyOnWriteManager<E> {
      *  the same instance.
      */
     public E frozen() {
-        Root a = _active;
+        final Root a = _active;
         final E f = a.getFrozenValue();
         if (f != null) {
             return f;
