@@ -296,7 +296,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         return comparator;
     }
 
-    //////// search
+    //////// concurrent search
 
     @Override
     public boolean containsKey(final Object key) {
@@ -416,39 +416,37 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     public K firstKey() {
-        return extremeKey(Left);
+        return (K) extremeOrThrow(true, Left);
     }
 
     public Map.Entry<K,V> firstEntry() {
-        return extremeEntry(Left);
+        return (SimpleImmutableEntry<K,V>) extremeOrThrow(false, Left);
     }
 
     public K lastKey() {
-        return extremeKey(Right);
+        return (K) extremeOrThrow(true, Right);
     }
 
     public Map.Entry<K,V> lastEntry() {
-        return extremeEntry(Right);
+        return (SimpleImmutableEntry<K,V>) extremeOrThrow(false, Right);
     }
 
-    @SuppressWarnings("unchecked")
-    private K extremeKey(final char dir) {
-        return (K) extreme(true, dir);
-    }
-
-    @SuppressWarnings("unchecked")
-    private SimpleImmutableEntry<K,V> extremeEntry(final char dir) {
-        return (SimpleImmutableEntry<K,V>) extreme(false, dir);        
+    private Object extremeOrThrow(final boolean returnKey, final char dir) {
+        final Object z = extreme(returnKey, dir);
+        if (z == null) {
+            throw new NoSuchElementException();
+        }
+        return z;
     }
 
     /** Returns a key if returnKey is true, a SimpleImmutableEntry otherwise.
-     *  Throws {@link NoSuchElementException} if none exists.
+     *  Returns null if none exists.
      */
     private Object extreme(final boolean returnKey, final char dir) {
         while (true) {
             final Node<K,V> right = holderRef.read().right;
             if (right == null) {
-                throw new NoSuchElementException();
+                return null;
             } else {
                 final long ovl = right.shrinkOVL;
                 if (isShrinkingOrUnlinked(ovl)) {
@@ -517,63 +515,162 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
     }
 
-//    /** Returns null if none exists. */
-//    private Object boundedExtreme(final Object fromKey,
-//                                  final boolean fromIncl,
-//                                  final Object toKey,
-//                                  final boolean toIncl,
-//                                  final boolean returnKey,
-//                                  final char dir) {
-//        final Comparable<? super K> fromCmp = (fromKey == null) ? null : comparable(fromKey);
-//        final Comparable<? super K> toCmp = (toKey == null) ? null : comparable(toKey);
-//
-//        final Node<K,V> cur = holderRef.read().right;
-//        if (cur == null) {
-//            return null;
-//        }
-//
-//        Node<K,V> curMin = null;
-//        Node<K,V> curMax = null;
-//        while (true) {
-//            final int fc = (fromCmp == null) ? 1 : fromCmp.compareTo(cur.key);
-//            final int tc = (toCmp == null) ? -1 : toCmp.compareTo(cur.key);
-//
-//        }
-//    }
-//
-//    private Object boundedMin(final Object fromKey, final boolean fromIncl, final boolean returnKey) {
-//        return boundedMin(holderRef.read().right, comparable(fromKey), fromIncl, returnKey);
-//    }
-//
-//    private Object boundedMin(final Node<K,V> node,
-//                              final Comparable<? super K> fromCmp,
-//                              final boolean fromIncl,
-//                              final boolean returnKey) {
-//        if (node == null) {
-//            return null;
-//        }
-//
-//        final int c = fromCmp.compareTo(node.key);
-//        if (c < 0) {
-//            // there may be a matching node on the left branch
-//            final Object z = boundedMin(node.left, fromCmp, fromIncl, returnKey);
-//            if (z != null) {
-//                return z;
-//            }
-//        }
-//
-//        if (c < 0 || (c == 0 && fromIncl)) {
-//            // this node is a candidate, is it actually present?
-//            final Object vo = node.vOpt;
-//            if (vo != null) {
-//                // success
-//                return returnKey ? node.key : new SimpleImmutableEntry<K,V>(node.key, decodeNull(vo));
-//            }
-//        }
-//
-//        // either the right branch is empty, or the matching node is on the right branch
-//        return boundedMin(node.right, fromCmp, fromIncl, returnKey);
-//    }
+    //////////////// quiesced search
+
+    public K lowerKey(final K key) { return (K) boundedExtreme(null, false, key, false, true, Right); }
+    public K floorKey(final K key) { return (K) boundedExtreme(null, false, key, true, true, Right); }
+    public K ceilingKey(final K key) { return (K) boundedExtreme(key, true, null, false, true, Left); }
+    public K higherKey(final K key) { return (K) boundedExtreme(key, false, null, false, true, Left); }
+
+    public Entry<K,V> lowerEntry(final K key) {
+        return (Entry<K,V>) boundedExtreme(null, false, key, false, false, Right);
+    }
+    public Entry<K,V> floorEntry(final K key) {
+        return (Entry<K,V>) boundedExtreme(null, false, key, true, false, Right);
+    }
+    public Entry<K,V> ceilingEntry(final K key) {
+        return (Entry<K,V>) boundedExtreme(key, true, null, false, false, Left);
+    }
+    public Entry<K,V> higherEntry(final K key) {
+        return (Entry<K,V>) boundedExtreme(key, false, null, false, false, Left);
+    }
+
+    /** Returns null if none exists. */
+    private Object boundedExtremeOrThrow(final Object fromKey,
+                                         final boolean fromIncl,
+                                         final Object toKey,
+                                         final boolean toIncl,
+                                         final boolean returnKey,
+                                         final char dir) {
+        final Object z = boundedExtreme(fromKey, fromIncl, toKey, toIncl, returnKey, dir);
+        if (z == null) {
+            throw new NoSuchElementException();
+        }
+        return z;
+    }
+
+    /** Returns null if none exists. */
+    private Object boundedExtreme(final Object fromKey,
+                                  final boolean fromIncl,
+                                  final Object toKey,
+                                  final boolean toIncl,
+                                  final boolean returnKey,
+                                  final char dir) {
+        K resultKey;
+        Object result;
+
+        if ((dir == Left && fromKey == null) || (dir == Right && toKey == null)) {
+            // no bound in the extreme direction, so use the concurrent search
+            result = extreme(returnKey, dir);
+            if (result == null) {
+                return null;
+            }
+            resultKey = returnKey ? (K) result : ((SimpleImmutableEntry<K,V>) result).getKey();
+        }
+        else {
+            RootHolder holder = holderRef.availableFrozen();
+            final Epoch.Ticket ticket;
+            if (holder == null) {
+                ticket = holderRef.beginQuiescent();
+                holder = holderRef.read();
+            }
+            else {
+                ticket = null;
+            }
+            try {
+                final Node<K,V> node = (dir == Left)
+                        ? boundedMin(holder.right, comparable(fromKey), fromIncl)
+                        : boundedMax(holder.right, comparable(toKey), toIncl);
+                if (node == null) {
+                    return null;
+                }
+                resultKey = node.key;
+                if (returnKey) {
+                    result = node.key;
+                }
+                else if (ticket == null) {
+                    // node of a frozen tree is okay, copy otherwise
+                    result = node;
+                }
+                else {
+                    // we must copy the node
+                    result = new SimpleImmutableEntry<K,V>(node.key, node.getValue());
+                }
+            }
+            finally {
+                if (ticket != null) {
+                    ticket.leave(0);
+                }
+            }
+        }
+
+        if (dir == Left && toKey != null) {
+            final int c = comparable(toKey).compareTo(resultKey);
+            if (c > 0 || (c == 0 && !toIncl)) {
+                return null;
+            }
+        }
+        if (dir == Right && fromKey != null) {
+            final int c = comparable(fromKey).compareTo(resultKey);
+            if (c < 0 || (c == 0 && !fromIncl)) {
+                return null;
+            }
+        }
+
+        return result;
+    }
+
+    private Node<K,V> boundedMin(Node<K,V> node,
+                                 final Comparable<? super K> fromCmp,
+                                 final boolean fromIncl) {
+        while (node != null) {
+            final int c = fromCmp.compareTo(node.key);
+            if (c < 0) {
+                // there may be a matching node on the left branch
+                final Node<K,V> z = boundedMin(node.left, fromCmp, fromIncl);
+                if (z != null) {
+                    return z;
+                }
+            }
+
+            if (c < 0 || (c == 0 && fromIncl)) {
+                // this node is a candidate, is it actually present?
+                if (node.vOpt != null) {
+                    return node;
+                }
+            }
+
+            // the matching node is on the right branch if it is present
+            node = node.right;
+        }
+        return null;
+    }
+
+    private Node<K,V> boundedMax(Node<K,V> node,
+                                 final Comparable<? super K> toCmp,
+                                 final boolean toIncl) {
+        while (node != null) {
+            final int c = toCmp.compareTo(node.key);
+            if (c > 0) {
+                // there may be a matching node on the right branch
+                final Node<K,V> z = boundedMax(node.right, toCmp, toIncl);
+                if (z != null) {
+                    return z;
+                }
+            }
+
+            if (c > 0 || (c == 0 && toIncl)) {
+                // this node is a candidate, is it actually present?
+                if (node.vOpt != null) {
+                    return node;
+                }
+            }
+
+            // the matching node is on the left branch if it is present
+            node = node.left;
+        }
+        return null;
+    }
 
     //////////////// update
 
@@ -1745,41 +1842,4 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         // TODO: implement
         throw new UnsupportedOperationException();
     }
-
-
-    //////////////// inequality search
-
-    public K lowerKey(final K key) { return lowerEntry(key).getKey(); }
-    public K floorKey(final K key) { return floorEntry(key).getKey(); }
-    public K ceilingKey(final K key) { return ceilingEntry(key).getKey(); }
-    public K higherKey(final K key) { return higherEntry(key).getKey(); }
-
-    @Override
-    public Entry<K,V> lowerEntry(final K key) {
-        // largest < key
-        return null;
-//        return (Entry<K,V>) boundedExtreme(null, false, key, false, false, Right);
-    }
-
-
-    @Override
-    public Entry<K,V> floorEntry(final K key) {
-        // largest <= key
-        return null;  //To change body of implemented methods use File | Settings | File Templates.
-    }
-
-
-    @Override
-    public Entry<K,V> ceilingEntry(final K key) {
-        // smallest >= key
-        return null;  //To change body of implemented methods use File | Settings | File Templates.
-    }
-
-
-    @Override
-    public Entry<K,V> higherEntry(final K key) {
-        // smallest > key
-        return null;  //To change body of implemented methods use File | Settings | File Templates.
-    }
-
 }
