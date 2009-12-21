@@ -198,6 +198,30 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             assert(h == height);
             return height;
         }
+
+        //////// Map.Entry stuff
+
+        public boolean equals(final Object o) {
+            if (!(o instanceof Map.Entry)) {
+                return false;
+            }
+            final Map.Entry rhs = (Map.Entry)o;
+            return eq(key, rhs.getKey()) && eq(getValue(), rhs.getValue());
+        }
+
+        private static boolean eq(final Object o1, final Object o2) {
+            return o1 == null ? o2 == null : o1.equals(o2);
+        }
+
+        public int hashCode() {
+            return (key   == null ? 0 : key.hashCode()) ^
+                   (getValue() == null ? 0 : getValue().hashCode());
+        }
+
+        public String toString() {
+            return key + "=" + getValue();
+        }
+
     }
 
     private static class RootHolder<K,V> extends Node<K,V> {
