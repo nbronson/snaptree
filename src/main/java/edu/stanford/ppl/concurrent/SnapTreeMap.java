@@ -5,9 +5,9 @@
 package edu.stanford.ppl.concurrent;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentNavigableMap;
 
-public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V>, Cloneable {
+public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
 
     /** This is a special value that indicates the presence of a null value,
      *  to differentiate from the absence of a value.
@@ -415,31 +415,35 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    @SuppressWarnings("unchecked")
-    // TODO: @Override
     public K firstKey() {
-        return (K) extreme(true, Left);
+        return extremeKey(Left);
     }
 
-    @SuppressWarnings("unchecked")
-    // TODO: @Override
     public Map.Entry<K,V> firstEntry() {
-        return (SimpleImmutableEntry<K,V>) extreme(false, Left);
+        return extremeEntry(Left);
     }
 
-    @SuppressWarnings("unchecked")
-    // TODO: @Override
     public K lastKey() {
-        return (K) extreme(true, Right);
+        return extremeKey(Right);
+    }
+
+    public Map.Entry<K,V> lastEntry() {
+        return extremeEntry(Right);
     }
 
     @SuppressWarnings("unchecked")
-    // TODO: @Override
-    public Map.Entry<K,V> lastEntry() {
-        return (SimpleImmutableEntry<K,V>) extreme(false, Right);
+    private K extremeKey(final char dir) {
+        return (K) extreme(true, dir);
     }
 
-    /** Returns a key if returnKey is true, a SimpleImmutableEntry otherwise. */
+    @SuppressWarnings("unchecked")
+    private SimpleImmutableEntry<K,V> extremeEntry(final char dir) {
+        return (SimpleImmutableEntry<K,V>) extreme(false, dir);        
+    }
+
+    /** Returns a key if returnKey is true, a SimpleImmutableEntry otherwise.
+     *  Throws {@link NoSuchElementException} if none exists.
+     */
     private Object extreme(final boolean returnKey, final char dir) {
         while (true) {
             final Node<K,V> right = holderRef.read().right;
@@ -512,6 +516,64 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             }
         }
     }
+
+//    /** Returns null if none exists. */
+//    private Object boundedExtreme(final Object fromKey,
+//                                  final boolean fromIncl,
+//                                  final Object toKey,
+//                                  final boolean toIncl,
+//                                  final boolean returnKey,
+//                                  final char dir) {
+//        final Comparable<? super K> fromCmp = (fromKey == null) ? null : comparable(fromKey);
+//        final Comparable<? super K> toCmp = (toKey == null) ? null : comparable(toKey);
+//
+//        final Node<K,V> cur = holderRef.read().right;
+//        if (cur == null) {
+//            return null;
+//        }
+//
+//        Node<K,V> curMin = null;
+//        Node<K,V> curMax = null;
+//        while (true) {
+//            final int fc = (fromCmp == null) ? 1 : fromCmp.compareTo(cur.key);
+//            final int tc = (toCmp == null) ? -1 : toCmp.compareTo(cur.key);
+//
+//        }
+//    }
+//
+//    private Object boundedMin(final Object fromKey, final boolean fromIncl, final boolean returnKey) {
+//        return boundedMin(holderRef.read().right, comparable(fromKey), fromIncl, returnKey);
+//    }
+//
+//    private Object boundedMin(final Node<K,V> node,
+//                              final Comparable<? super K> fromCmp,
+//                              final boolean fromIncl,
+//                              final boolean returnKey) {
+//        if (node == null) {
+//            return null;
+//        }
+//
+//        final int c = fromCmp.compareTo(node.key);
+//        if (c < 0) {
+//            // there may be a matching node on the left branch
+//            final Object z = boundedMin(node.left, fromCmp, fromIncl, returnKey);
+//            if (z != null) {
+//                return z;
+//            }
+//        }
+//
+//        if (c < 0 || (c == 0 && fromIncl)) {
+//            // this node is a candidate, is it actually present?
+//            final Object vo = node.vOpt;
+//            if (vo != null) {
+//                // success
+//                return returnKey ? node.key : new SimpleImmutableEntry<K,V>(node.key, decodeNull(vo));
+//            }
+//        }
+//
+//        // either the right branch is empty, or the matching node is on the right branch
+//        return boundedMin(node.right, fromCmp, fromIncl, returnKey);
+//    }
 
     //////////////// update
 
@@ -1415,7 +1477,12 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         return fixHeight_nl(nParent);
     }
 
-    //////////////// views
+    //////////////// Map views
+
+    @Override
+    public NavigableSet<K> keySet() {
+        return navigableKeySet();
+    }
 
     @Override
     public Set<Map.Entry<K,V>> entrySet() {
@@ -1477,13 +1544,25 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    private class EntryIter implements Iterator<Map.Entry<K,V>> {
+    private class EntryIter extends AbstractIter implements Iterator<Map.Entry<K,V>> {
+        public Entry<K,V> next() {
+            return nextNode();
+        }
+    }
+
+    private class KeyIter extends AbstractIter implements Iterator<K> {
+        public K next() {
+            return nextNode().key;
+        }
+    }
+
+    private class AbstractIter {
         private Node<K,V>[] path;
         private int depth = 0;
         private Node<K,V> mostRecentNode;
 
         @SuppressWarnings("unchecked")
-        EntryIter() {
+        AbstractIter() {
             final Node<K,V> root = holderRef.frozen().right;
             path = (Node<K,V>[]) new Node[1 + height(root)];
             pushMin(root);
@@ -1524,21 +1603,183 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             } while (top().vOpt == null);
         }
 
-        @Override
         public boolean hasNext() {
             return depth > 0;
         }
 
-        @Override
-        public Node<K,V> next() {
+        Node<K,V> nextNode() {
             mostRecentNode = top();
             advance();
             return mostRecentNode;
         }
 
-        @Override
         public void remove() {
             SnapTreeMap.this.remove(mostRecentNode.key);
         }
     }
+
+    //////////////// navigable keySet
+
+    @Override
+    public NavigableSet<K> navigableKeySet() {
+        return new KeySet<K>(this) {
+            public Iterator<K> iterator() {
+                return new KeyIter();
+            }
+        };
+    }
+
+    @Override
+    public NavigableSet<K> descendingKeySet() {
+        return descendingMap().navigableKeySet();
+    }
+
+    private abstract static class KeySet<K> extends AbstractSet<K> implements NavigableSet<K> {
+
+        private final ConcurrentNavigableMap<K,?> map;
+
+        protected KeySet(final ConcurrentNavigableMap<K,?> map) {
+            this.map = map;
+        }
+
+        //////// basic Set stuff
+
+        abstract public Iterator<K> iterator();
+
+        @Override
+        public boolean contains(final Object o) { return map.containsKey(o); }
+        public int size() { return map.size(); }
+        @Override
+        public boolean remove(final Object o) { return map.remove(o) != null; }
+
+        //////// SortedSet stuff
+
+        public Comparator<? super K> comparator() { return map.comparator(); }
+        public K first() { return map.firstKey(); }
+        public K last() { return map.lastKey(); }
+
+        //////// NavigableSet stuff
+
+        public K lower(final K k) { return map.lowerKey(k); }
+        public K floor(final K k) { return map.floorKey(k); }
+        public K ceiling(final K k) { return map.ceilingKey(k); }
+        public K higher(final K k) { return map.higherKey(k); }
+
+        public K pollFirst() { return map.pollFirstEntry().getKey(); }
+        public K pollLast() { return map.pollLastEntry().getKey(); }
+
+        public NavigableSet<K> descendingSet() { return map.descendingKeySet(); }
+        public Iterator<K> descendingIterator() { return map.descendingKeySet().iterator(); }
+
+        public NavigableSet<K> subSet(final K fromElement, final boolean fromInclusive, final K toElement, final boolean toInclusive) {
+            return map.subMap(fromElement, fromInclusive, toElement, toInclusive).keySet();
+        }
+        public NavigableSet<K> headSet(final K toElement, final boolean inclusive) {
+            return map.headMap(toElement, inclusive).keySet();
+        }
+        public NavigableSet<K> tailSet(final K fromElement, final boolean inclusive) {
+            return map.tailMap(fromElement, inclusive).keySet();
+        }
+        public SortedSet<K> subSet(final K fromElement, final K toElement) {
+            return map.subMap(fromElement, toElement).keySet();
+        }
+        public SortedSet<K> headSet(final K toElement) {
+            return map.headMap(toElement).keySet();
+        }
+        public SortedSet<K> tailSet(final K fromElement) {
+            return map.tailMap(fromElement).keySet();
+        }
+    }
+
+    //////////////// NavigableMap views
+
+    @Override
+    public ConcurrentNavigableMap<K,V> subMap(final K fromKey, final boolean fromInclusive, final K toKey, final boolean toInclusive) {
+        if (fromKey == null || toKey == null) {
+            throw new NullPointerException();
+        }
+        return subMapImpl(fromKey, fromInclusive, toKey, toInclusive, false);
+    }
+
+    @Override
+    public ConcurrentNavigableMap<K,V> headMap(final K toKey, final boolean inclusive) {
+        if (toKey == null) {
+            throw new NullPointerException();
+        }
+        return subMapImpl(null, false, toKey, inclusive, false);
+    }
+
+    @Override
+    public ConcurrentNavigableMap<K,V> tailMap(final K fromKey, final boolean inclusive) {
+        if (fromKey == null) {
+            throw new NullPointerException();
+        }
+        return subMapImpl(fromKey, inclusive, null, false, false);
+    }
+
+    @Override
+    public ConcurrentNavigableMap<K,V> subMap(final K fromKey, final K toKey) {
+        return subMap(fromKey, true, toKey, false);
+    }
+
+    @Override
+    public ConcurrentNavigableMap<K,V> headMap(final K toKey) {
+        return headMap(toKey, false);
+    }
+
+    @Override
+    public ConcurrentNavigableMap<K,V> tailMap(final K fromKey) {
+        return tailMap(fromKey, true);
+    }
+
+    @Override
+    public ConcurrentNavigableMap<K,V> descendingMap() {
+        return subMapImpl(null, false, null, false, true);
+    }
+
+    private ConcurrentNavigableMap<K,V> subMapImpl(final K fromKey,
+                                                   final boolean fromIncl,
+                                                   final K toKey,
+                                                   final boolean toIncl,
+                                                   final boolean descending) {
+        // TODO: implement
+        throw new UnsupportedOperationException();
+    }
+
+
+    //////////////// inequality search
+
+    public K lowerKey(final K key) { return lowerEntry(key).getKey(); }
+    public K floorKey(final K key) { return floorEntry(key).getKey(); }
+    public K ceilingKey(final K key) { return ceilingEntry(key).getKey(); }
+    public K higherKey(final K key) { return higherEntry(key).getKey(); }
+
+    @Override
+    public Entry<K,V> lowerEntry(final K key) {
+        // largest < key
+        return null;
+//        return (Entry<K,V>) boundedExtreme(null, false, key, false, false, Right);
+    }
+
+
+    @Override
+    public Entry<K,V> floorEntry(final K key) {
+        // largest <= key
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
+    }
+
+
+    @Override
+    public Entry<K,V> ceilingEntry(final K key) {
+        // smallest >= key
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
+    }
+
+
+    @Override
+    public Entry<K,V> higherEntry(final K key) {
+        // smallest > key
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
+    }
+
 }
