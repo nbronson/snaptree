@@ -3,6 +3,7 @@
 // CopyOnWriteManager
 package edu.stanford.ppl.concurrent;
 
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 
 /** Manages copy-on-write behavior for a concurrent tree structure.  It is
@@ -22,8 +23,8 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
      *  uninterruptable acquireShared.
      */
     private class Latch extends AbstractQueuedSynchronizer {
-        Latch() {
-            setState(1);
+        Latch(final boolean triggered) {
+            setState(triggered ? 0 : 1);
         }
 
         public int tryAcquireShared(final int acquires) {
@@ -38,7 +39,19 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
         }
     }
 
-    private class Root extends EpochNode {
+    private static final int MUTATE = 1;
+    private static final int MUTATE_AFTER_FREEZE = 2;
+    private static final int BULK_READ = 3;
+    private static final int BULK_READ_AFTER_FREEZE = 4;
+
+    private class COWEpoch extends EpochNode {
+
+        /** Tripped after this COWEpoch is installed as active. */
+        private final Latch _activated;
+
+        /** True iff this is a mutating epoch. */
+        final boolean mutationAllowed;
+
         /** The value used by this epoch. */
         E value;
 
@@ -47,33 +60,31 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
          */
         int initialSize;
 
-        /** True if this epoch is being closed to generate a frozen value. */
-        boolean closeShouldFreeze;
-
         /** A frozen E equal to <code>value</code>, if not <code>dirty</code>. */
         private volatile E _frozenValue;
 
         /** True if any mutations have been performed on <code>value</code>. */
         volatile boolean dirty;
 
-        /** The epoch that will follow this one.  All of the fields added by
-         *  <code>Root</code> may be uninitialized.
-         */
-        Root queued;
+        /** The epoch that will follow this one, created on demand. */
+        final AtomicReference<COWEpoch> successorRef = new AtomicReference<COWEpoch>(null);
+                
+        /** A ticket on the successor, released when this epoch is closed. */
+        Epoch.Ticket successorTicket;
 
-        /** A latch that will be triggered when this epoch has completed its
-         *  shutdown and installed <code>queued</code> as the active epoch.
-         */
-        private Latch _closed;
+        /** True if the successor should freeze and clone this epoch's value. */  
+        boolean freezeRequested;
 
-        private Root() {
+        private COWEpoch(final boolean mutationAllowed) {
+            this._activated = new Latch(false);
+            this.mutationAllowed = mutationAllowed;
         }
 
-        public Root(final E value, final int initialSize) {
+        public COWEpoch(final E value, final int initialSize) {
+            this._activated = new Latch(true); // pre-triggered
+            this.mutationAllowed = true;
             this.value = value;
             this.initialSize = initialSize;
-            this.queued = new Root();
-            this._closed = new Latch();
             // no frozenValue, so we are considered dirty
             this.dirty = true;
         }
@@ -105,45 +116,66 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
         protected void onClosed(final int dataSum) {
             assert(dataSum == 0 || dirty);
 
-            queued.queued = new Root();
-            if (closeShouldFreeze) {
-                queued.value = freezeAndClone(value);
-                queued.setFrozenValue(value);
+            final COWEpoch succ = successorRef.get();
+            if (freezeRequested) {
+                succ.value = freezeAndClone(value);
+                succ.setFrozenValue(value);
             }
             else {
-                queued.value = value;
-
-                // Since we're not actually copying, any mutations in this
-                // epoch dirty the next one.
+                succ.value = value;
                 if (dirty) {
-                    queued.dirty = true;
+                    succ.dirty = true;
                 }
                 else {
-                    queued.setFrozenValue(_frozenValue);
+                    succ.setFrozenValue(_frozenValue);
                 }
             }
-            queued.initialSize = initialSize + dataSum;
-            queued._closed = new Latch();
+            succ.initialSize = initialSize + dataSum;
 
-            assert(!dirty || _frozenValue == null);
-
-            _active = queued;
-            _closed.releaseShared(1);
+            _active = succ;
+            successorTicket.leave(0);
+            succ._activated.releaseShared(1);
         }
 
-        public void awaitClosed() {
-            _closed.acquireShared(1);
+        public void awaitActivated() {
+            _activated.acquireShared(1);
+        }
+
+        public COWEpoch getOrCreateSuccessor(final boolean preferredMutation) {
+            final COWEpoch existing = successorRef.get();
+            if (existing != null) {
+                return existing;
+            }
+
+            final COWEpoch repl = new COWEpoch(preferredMutation);
+            if (attemptInstallSuccessor(repl)) {
+                return repl;
+            }
+
+            return successorRef.get();
+        }
+
+        public boolean attemptInstallSuccessor(final COWEpoch succ) {
+            final Epoch.Ticket t = succ.attemptArrive();
+            if (successorRef.compareAndSet(null, succ)) {
+                successorTicket = t;
+                beginClose();
+                return true;
+            }
+            else {
+                return false;
+            }
         }
     }
 
-    private volatile Root _active;
+    private volatile COWEpoch _active;
 
     /** Creates a new {@link CopyOnWriteManager} holding
      *  <code>initialValue</code>, with an assumed size of
      *  <code>initialSize</code>.
      */
     public CopyOnWriteManager(final E initialValue, final int initialSize) {
-        _active = new Root(initialValue, initialSize);
+        _active = new COWEpoch(initialValue, initialSize);
     }
 
     /** The implementing method must mark <code>value</code> as shared, and
@@ -164,16 +196,19 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
             throw new Error("unexpected", xx);
         }
 
-        final Root a = _active;
+        COWEpoch a = _active;
         E f = a.getFrozenValue();
-        if (f == null) {
-            a.closeShouldFreeze = true;
-            a.beginClose();
-            a.awaitClosed();
-            f = a.value;
+        while (f == null) {
+            a.freezeRequested = true;
+            final COWEpoch succ = a.getOrCreateSuccessor(a.mutationAllowed);
+            succ.awaitActivated();
+            if (a.value != succ.value) {
+                f = a.value;
+            }
+            a = succ;
         }
 
-        copy._active = new Root(cloneFrozen(f), a.initialSize);
+        copy._active = new COWEpoch(cloneFrozen(f), a.initialSize);
         return copy;
     }
 
@@ -194,24 +229,51 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
      *  passed as the parameter to <code>leave</code>.
      */
     public Epoch.Ticket beginMutation() {
+        return begin(true);
+    }
+
+    public Epoch.Ticket beginQuiescent() {
+        return begin(false);
+    }
+
+    private Epoch.Ticket begin(final boolean mutation) {
+        final COWEpoch active = _active;
+        if (active.mutationAllowed == mutation) {
+            final Epoch.Ticket ticket = active.attemptArrive();
+            if (ticket != null) {
+                return ticket;
+            }
+        }
+        return begin(mutation, active);
+    }
+
+    private Epoch.Ticket begin(final boolean mutation, COWEpoch epoch) {
         while (true) {
-            final Root a = _active;
-            final Epoch.Ticket t0 = a.attemptArrive();
-            if (t0 != null) {
-                // success
-                return t0;
+            COWEpoch succ = epoch.successorRef.get();
+            if (succ == null) {
+                final COWEpoch newEpoch = new COWEpoch(mutation);
+                final Epoch.Ticket newTicket = newEpoch.attemptArrive();
+                if (epoch.attemptInstallSuccessor(newEpoch)) {
+                    // can't use the ticket until the new epoch is activated
+                    newEpoch.awaitActivated();
+                    return newTicket;
+                }
+
+                // if our CAS failed, somebody else succeeded
+                succ = epoch.successorRef.get();
             }
 
-            final Epoch.Ticket t1 = a.queued.attemptArrive();
-            if (t1 != null) {
-                // we are guaranteed a seat at the table *next* epoch
-                a.awaitClosed();
-                return t1;
+            // is the successor created by someone else suitable?
+            if (succ.mutationAllowed == mutation) {
+                final Epoch.Ticket ticket = succ.attemptArrive();
+                if (ticket != null) {
+                    succ.awaitActivated();
+                    return ticket;
+                }
             }
 
-            // our read of _active must be stale, try again
-            assert(_active != a);
-        }        
+            epoch = succ;
+        }
     }
 
     /** Returns a reference to the tree structure suitable for a mutating
@@ -230,17 +292,18 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
      *  the same instance.
      */
     public E frozen() {
-        final Root a = _active;
-        final E f = a.getFrozenValue();
-        if (f != null) {
-            return f;
+        COWEpoch a = _active;
+        E f = a.getFrozenValue();
+        while (f == null) {
+            a.freezeRequested = true;
+            final COWEpoch succ = a.getOrCreateSuccessor(a.mutationAllowed);
+            succ.awaitActivated();
+            if (a.value != succ.value) {
+                f = a.value;
+            }
+            a = succ;
         }
-        else {
-            a.closeShouldFreeze = true;
-            a.beginClose();
-            a.awaitClosed();
-            return a.value;
-        }
+        return f;
     }
 
     /** Returns true if the computed {@link #size} is zero. */
@@ -257,16 +320,15 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
      *  is required, however.
      */
     public int size() {
-        final Root a = _active;
+        final COWEpoch a = _active;
         final Integer delta = a.attemptDataSum();
         if (delta != null) {
             return a.initialSize + delta;
         }
-        else {
-            a.closeShouldFreeze = true;
-            a.beginClose();
-            a.awaitClosed();
-            return a.queued.initialSize;
-        }
+
+        // wait for an existing successor, or force one if not already in progress
+        final COWEpoch succ = a.getOrCreateSuccessor(a.mutationAllowed); 
+        succ.awaitActivated();
+        return succ.initialSize;
     }
 }

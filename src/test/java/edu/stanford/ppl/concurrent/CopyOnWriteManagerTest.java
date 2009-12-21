@@ -110,7 +110,7 @@ public class CopyOnWriteManagerTest extends TestCase {
         final long elapsed = ParUtil.timeParallel(numThreads, new Runnable() {
             public void run() {
                 final Random rand = new Random();
-                for (int i = 0; i < opsPerThread; ++i) {
+                for (int op = 0; op < opsPerThread; ++op) {
                     final int pct = rand.nextInt(100);
                     if (pct < 1) {
                         final Payload snap = m.frozen();
@@ -119,13 +119,28 @@ public class CopyOnWriteManagerTest extends TestCase {
                     }
                     else if (pct < 2) {
                         final int s0 = m.read().size();
+                        final COWM copy = (COWM) m.clone();
+                        assertEquals(copy.read().size(), copy.size());
+                        assertTrue(s0 <= copy.size());
+                        assertTrue(copy.size() <= m.read().size());
+                    }
+                    else if (pct < 3) {
+                        final int s0 = m.read().size();
                         final int s1 = m.size();
                         final int s2 = m.read().size();
-                        if (s0 > s1) {
-                            assertTrue(s0 <= s1);
+                        assertTrue(s0 <= s1);
+                        assertTrue(s1 <= s2);
+                    }
+                    else if (pct < 4) {
+                        final Epoch.Ticket t = m.beginQuiescent();
+                        try {
+                            final int s0 = m.read().size();
+                            for (int i = 0; i < 20; ++i) {
+                                assertEquals(s0, m.read().size());
+                            }
                         }
-                        if (s1 > s2) {
-                            assertTrue(s1 <= s2);
+                        finally {
+                            t.leave(0);
                         }
                     }
                     else if (pct < 20) {
