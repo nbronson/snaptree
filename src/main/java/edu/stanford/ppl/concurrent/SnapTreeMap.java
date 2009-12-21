@@ -1642,12 +1642,26 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private class EntryIter extends AbstractIter implements Iterator<Map.Entry<K,V>> {
+        private EntryIter() {
+        }
+
+        private EntryIter(final Object fromKey, final boolean fromIncl, final Object toKey, final boolean toIncl) {
+            super(fromKey, fromIncl, toKey, toIncl);
+        }
+
         public Entry<K,V> next() {
             return nextNode();
         }
     }
 
     private class KeyIter extends AbstractIter implements Iterator<K> {
+        private KeyIter() {
+        }
+
+        private KeyIter(final Object fromKey, final boolean fromIncl, final Object toKey, final boolean toIncl) {
+            super(fromKey, fromIncl, toKey, toIncl);
+        }
+
         public K next() {
             return nextNode().key;
         }
@@ -1657,19 +1671,80 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         private Node<K,V>[] path;
         private int depth = 0;
         private Node<K,V> mostRecentNode;
+        private Node<K,V> end;
 
         @SuppressWarnings("unchecked")
         AbstractIter() {
             final Node<K,V> root = holderRef.frozen().right;
-            path = (Node<K,V>[]) new Node[1 + height(root)];
+            this.path = (Node<K,V>[]) new Node[1 + height(root)];
             pushMin(root);
-            // min can't be removed, so we don't need to check vOpt
+        }
+
+        AbstractIter(final Object fromKey,
+                     final boolean fromIncl,
+                     final Object toKey,
+                     final boolean toIncl) {
+            final Node<K,V> root = holderRef.frozen().right;
+
+            Comparable<? super K> toCmp = null;
+            if (toKey != null) {
+                toCmp = comparable(toKey);
+                this.end = boundedMax(root.right, toCmp, toIncl);
+                if (this.end == null) {
+                    // no node satisfies the bound, nothing to iterate
+                    // ---------> EARLY EXIT
+                    return;
+                }
+            }
+
+            this.path = (Node<K,V>[]) new Node[1 + height(root)];
+
+            if (fromKey == null) {
+                pushMin(root);
+            }
+            else {
+                pushMin(root, comparable(fromKey), fromIncl);
+                if (depth > 0 && toCmp != null) {
+                    final int c = toCmp.compareTo(top().key);
+                    if (c > 0 || (c == 0 && !toIncl)) {
+                        this.depth = 0;
+                        this.path = null;
+                        this.end = null;
+                        // -----------> EARLY EXIT
+                        return;
+                    }
+                }
+
+                if (top().vOpt == null) {
+                    advance();
+                }
+            }
         }
 
         private void pushMin(Node<K,V> node) {
             while (node != null) {
                 path[depth++] = node;
                 node = node.left;
+            }
+        }
+
+        private void pushMin(Node<K,V> node, final Comparable<? super K> fromCmp, final boolean fromIncl) {
+            while (node != null) {
+                final int c = fromCmp.compareTo(node.key);
+                if (c < 0 || (c == 0 && !fromIncl)) {
+                    // everything we're interested in is on the right
+                    node = node.right;
+                }
+                else {
+                    path[depth++] = node;
+                    if (c == 0) {
+                        // start the iteration here
+                        return;
+                    }
+                    else {
+                        node = node.left;
+                    }
+                }
             }
         }
 
@@ -1690,6 +1765,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                     } while (depth > 0 && popped == top().right);
                 }
 
+                if (end != null && end == top()) {
+                    depth = 0;
+                }
                 if (depth == 0) {
                     // clear out the path so we don't pin too much stuff
                     path = null;
