@@ -80,13 +80,17 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
             this.mutationAllowed = mutationAllowed;
         }
 
-        public COWEpoch(final E value, final int initialSize) {
+        public COWEpoch(final E value, final E frozenValue, final int initialSize) {
             this._activated = new Latch(true); // pre-triggered
             this.mutationAllowed = true;
             this.value = value;
             this.initialSize = initialSize;
-            // no frozenValue, so we are considered dirty
-            this.dirty = true;
+            this._frozenValue = frozenValue;
+            this.dirty = frozenValue == null;
+        }
+
+        EpochNode attemptInitialArrive() {
+            return super.attemptArrive();
         }
 
         @Override
@@ -108,7 +112,7 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
             }
         }
 
-        private E getFrozenValue() {
+        E getFrozenValue() {
             final E v = _frozenValue;
             return dirty ? null : v;
         }
@@ -156,7 +160,7 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
         }
 
         public boolean attemptInstallSuccessor(final COWEpoch succ) {
-            final Epoch.Ticket t = succ.attemptArrive();
+            final Epoch.Ticket t = succ.attemptInitialArrive();
             if (successorRef.compareAndSet(null, succ)) {
                 successorTicket = t;
                 beginClose();
@@ -175,7 +179,7 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
      *  <code>initialSize</code>.
      */
     public CopyOnWriteManager(final E initialValue, final int initialSize) {
-        _active = new COWEpoch(initialValue, initialSize);
+        _active = new COWEpoch(initialValue, null, initialSize);
     }
 
     /** The implementing method must mark <code>value</code> as shared, and
@@ -208,7 +212,7 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
             a = succ;
         }
 
-        copy._active = new COWEpoch(cloneFrozen(f), a.initialSize);
+        copy._active = new COWEpoch(cloneFrozen(f), f, a.initialSize);
         return copy;
     }
 
@@ -304,6 +308,15 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
             a = succ;
         }
         return f;
+    }
+
+    /** Returns a reference to a snapshot of this instance's tree structure,
+     *  if one is available without requiring any additional copying, otherwise
+     *  returns null.  May be used in combination with {@link #beginQuiescent}
+     *  to perform quiescent reads with minimal cost.
+     */
+    public E availableFrozen() {
+        return _active.getFrozenValue();
     }
 
     /** Returns true if the computed {@link #size} is zero. */

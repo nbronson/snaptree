@@ -99,6 +99,17 @@ public class CopyOnWriteManagerTest extends TestCase {
         assertEquals(12, m.read().size());
     }
 
+    public void testAvailableFrozen() {
+        final COWM m = new COWM(10);
+        assertNull(m.availableFrozen());
+        final COWM copy = (COWM) m.clone();
+        assertEquals(10, m.availableFrozen().size());
+        assertEquals(10, copy.availableFrozen().size());
+        incr(m);
+        assertNull(m.availableFrozen());
+        assertEquals(10, copy.availableFrozen().size());
+    }
+
     public void testParallel() {
         doParallel(1, 1000000);
         doParallel(2, 1000000);
