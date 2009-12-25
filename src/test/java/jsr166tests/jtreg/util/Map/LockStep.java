@@ -31,6 +31,8 @@ package jsr166tests.jtreg.util.Map;
  * @summary Test Map implementations for mutual compatibility
  */
 
+import edu.stanford.ppl.concurrent.SnapTreeMap;
+
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -104,7 +106,8 @@ public class LockStep {
                     new Hashtable(16),
                     new TreeMap(),
                     new ConcurrentHashMap(16),
-                    new ConcurrentSkipListMap() });
+                    new ConcurrentSkipListMap(),
+                    new SnapTreeMap() });
 
             for (int j = 0; j < 10; j++)
                 put(maps, r.nextInt(100), r.nextInt(100));
@@ -121,7 +124,8 @@ public class LockStep {
     void check(boolean cond) {if (cond) pass(); else fail();}
     void equal(Object x, Object y) {
         if (x == null ? y == null : x.equals(y)) pass();
-        else fail(x + " not equal to " + y);}
+        else fail((x == null ? null : x.getClass().getName()) + " " + x
+                + " not equal to " + (y == null ? null : y.getClass().getName()) + " " + y);}
     public static void main(String[] args) throws Throwable {
         new LockStep().instanceMain(args);}
     void instanceMain(String[] args) throws Throwable {

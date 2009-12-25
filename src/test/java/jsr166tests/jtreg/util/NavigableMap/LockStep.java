@@ -36,6 +36,7 @@ import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
 import static java.util.Collections.*;
+import edu.stanford.ppl.concurrent.SnapTreeMap;
 
 @SuppressWarnings("unchecked")
 public class LockStep {
@@ -63,6 +64,11 @@ public class LockStep {
                   new ConcurrentSkipListSet());
         lockSteps(new TreeSet(reverseOrder()),
                   new ConcurrentSkipListSet(reverseOrder()));
+
+        lockSteps(new TreeMap(),
+                  new SnapTreeMap());
+        lockSteps(new TreeMap(reverseOrder()),
+                  new SnapTreeMap(reverseOrder()));
     }
 
     static void lockSteps(NavigableMap m1, NavigableMap m2) {

@@ -7,6 +7,10 @@ package edu.stanford.ppl.concurrent;
 import java.util.*;
 import java.util.concurrent.ConcurrentNavigableMap;
 
+// TODO: serialization
+// TODO: submap
+// TODO: optimized buildFromSorted
+
 public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
 
     /** This is a special value that indicates the presence of a null value,
@@ -277,12 +281,32 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     //////////////// public interface
 
     public SnapTreeMap() {
-        this(null);
+        this.comparator = null;
+        this.holderRef = new COWMgr<K,V>();
     }
 
     public SnapTreeMap(final Comparator<? super K> comparator) {
         this.comparator = comparator;
         this.holderRef = new COWMgr<K,V>();
+    }
+
+    public SnapTreeMap(final Map<? extends K, ? extends V> source) {
+        this.comparator = null;
+        this.holderRef = new COWMgr<K,V>();
+        putAll(source);
+    }
+
+    public SnapTreeMap(final SortedMap<K,? extends V> source) {
+        this.comparator = source.comparator();
+        if (source instanceof SnapTreeMap) {
+            final SnapTreeMap<K,V> s = (SnapTreeMap<K,V>) source;
+            this.holderRef = (COWMgr<K,V>) s.holderRef.clone();
+        }
+        else {
+            this.holderRef = new COWMgr<K,V>();
+            // TODO: implement buildFromSorted
+            putAll(source);
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -1807,13 +1831,20 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         Node<K,V> nextNode() {
+            if (depth == 0) {
+                throw new NoSuchElementException();
+            }
             mostRecentNode = top();
             advance();
             return mostRecentNode;
         }
 
         public void remove() {
+            if (mostRecentNode == null) {
+                throw new IllegalStateException();
+            }
             SnapTreeMap.this.remove(mostRecentNode.key);
+            mostRecentNode = null;
         }
     }
 

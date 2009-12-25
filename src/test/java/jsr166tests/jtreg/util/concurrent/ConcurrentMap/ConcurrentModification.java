@@ -31,6 +31,8 @@ package jsr166tests.jtreg.util.concurrent.ConcurrentMap;
  * @summary Reasonable things should happen if mutating while iterating.
  */
 
+import edu.stanford.ppl.concurrent.SnapTreeMap;
+
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -95,6 +97,7 @@ public class ConcurrentModification {
     public static void main(String[] args) {
         test(new ConcurrentHashMap<Integer,Integer>());
         test(new ConcurrentSkipListMap<Integer,Integer>());
+        test(new SnapTreeMap<Integer,Integer>());
 
         System.out.printf("%nPassed = %d, failed = %d%n%n", passed, failed);
         if (failed > 0) throw new Error("Some tests failed");

@@ -32,6 +32,8 @@ package jsr166tests.jtreg.util.Map;
  * @author Martin Buchholz
  */
 
+import edu.stanford.ppl.concurrent.SnapTreeMap;
+
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -48,6 +50,7 @@ public class Get {
         testMap(new WeakHashMap<Character,Boolean>());
         testMap(new TreeMap<Character,Boolean>());
         testMap(new ConcurrentSkipListMap<Character,Boolean>());
+        testMap(new SnapTreeMap<Character,Boolean>());
     }
 
     private static void put(Map<Character,Boolean> m,

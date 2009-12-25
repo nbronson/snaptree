@@ -52,6 +52,8 @@ package jsr166tests.jtreg.util.Collection;
  * simultaneously test all other implementations.
  */
 
+import edu.stanford.ppl.concurrent.SnapTreeMap;
+
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -96,6 +98,7 @@ public class MOAT {
         testMap(new Hashtable<Integer,Integer>());
         testMap(new ConcurrentHashMap<Integer,Integer>(10, 0.5f));
         testMap(new ConcurrentSkipListMap<Integer,Integer>());
+        testMap(new SnapTreeMap<Integer,Integer>());
 
         // Empty collections
         final List<Integer> emptyArray = Arrays.asList(new Integer[]{});

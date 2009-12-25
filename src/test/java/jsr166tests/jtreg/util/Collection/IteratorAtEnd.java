@@ -34,6 +34,7 @@ package jsr166tests.jtreg.util.Collection;
 
 import java.util.*;
 import java.util.concurrent.*;
+import edu.stanford.ppl.concurrent.SnapTreeMap;
 
 @SuppressWarnings("unchecked")
 public class IteratorAtEnd {
@@ -62,6 +63,7 @@ public class IteratorAtEnd {
         testMap(new IdentityHashMap());
         testMap(new ConcurrentHashMap());
         testMap(new ConcurrentSkipListMap());
+        testMap(new SnapTreeMap());
         testMap(new TreeMap());
     }
 

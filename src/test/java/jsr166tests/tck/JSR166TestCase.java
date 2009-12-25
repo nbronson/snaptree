@@ -141,7 +141,9 @@ public class JSR166TestCase extends TestCase {
         suite.addTest(new TestSuite(ConcurrentHashMapTest.class));
         suite.addTest(new TestSuite(ConcurrentLinkedQueueTest.class));
         suite.addTest(new TestSuite(ConcurrentSkipListMapTest.class));
+        suite.addTest(new TestSuite(SnapTreeMapTest.class));
         suite.addTest(new TestSuite(ConcurrentSkipListSubMapTest.class));
+        suite.addTest(new TestSuite(SnapTreeSubMapTest.class));
         suite.addTest(new TestSuite(ConcurrentSkipListSetTest.class));
         suite.addTest(new TestSuite(ConcurrentSkipListSubSetTest.class));
         suite.addTest(new TestSuite(CopyOnWriteArrayListTest.class));
