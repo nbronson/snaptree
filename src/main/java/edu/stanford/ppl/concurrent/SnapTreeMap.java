@@ -565,32 +565,40 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     //////////////// quiesced search
 
-    public K lowerKey(final K key) { return (K) boundedExtreme(null, false, key, false, true, Right); }
-    public K floorKey(final K key) { return (K) boundedExtreme(null, false, key, true, true, Right); }
-    public K ceilingKey(final K key) { return (K) boundedExtreme(key, true, null, false, true, Left); }
-    public K higherKey(final K key) { return (K) boundedExtreme(key, false, null, false, true, Left); }
+    public K lowerKey(final K key) {
+        return (K) boundedExtreme(null, false, comparable(key), false, true, Right);
+    }
+    public K floorKey(final K key) {
+        return (K) boundedExtreme(null, false, comparable(key), true, true, Right);
+    }
+    public K ceilingKey(final K key) {
+        return (K) boundedExtreme(comparable(key), true, null, false, true, Left);
+    }
+    public K higherKey(final K key) {
+        return (K) boundedExtreme(comparable(key), false, null, false, true, Left); 
+    }
 
     public Entry<K,V> lowerEntry(final K key) {
-        return (Entry<K,V>) boundedExtreme(null, false, key, false, false, Right);
+        return (Entry<K,V>) boundedExtreme(null, false, comparable(key), false, false, Right);
     }
     public Entry<K,V> floorEntry(final K key) {
-        return (Entry<K,V>) boundedExtreme(null, false, key, true, false, Right);
+        return (Entry<K,V>) boundedExtreme(null, false, comparable(key), true, false, Right);
     }
     public Entry<K,V> ceilingEntry(final K key) {
-        return (Entry<K,V>) boundedExtreme(key, true, null, false, false, Left);
+        return (Entry<K,V>) boundedExtreme(comparable(key), true, null, false, false, Left);
     }
     public Entry<K,V> higherEntry(final K key) {
-        return (Entry<K,V>) boundedExtreme(key, false, null, false, false, Left);
+        return (Entry<K,V>) boundedExtreme(comparable(key), false, null, false, false, Left);
     }
 
     /** Returns null if none exists. */
-    private Object boundedExtremeOrThrow(final Object fromKey,
-                                         final boolean fromIncl,
-                                         final Object toKey,
-                                         final boolean toIncl,
+    private Object boundedExtremeOrThrow(final Comparable<? super K> minCmp,
+                                         final boolean minIncl,
+                                         final Comparable<? super K> maxCmp,
+                                         final boolean maxIncl,
                                          final boolean returnKey,
                                          final char dir) {
-        final Object z = boundedExtreme(fromKey, fromIncl, toKey, toIncl, returnKey, dir);
+        final Object z = boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, returnKey, dir);
         if (z == null) {
             throw new NoSuchElementException();
         }
@@ -598,16 +606,16 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     /** Returns null if none exists. */
-    private Object boundedExtreme(final Object fromKey,
-                                  final boolean fromIncl,
-                                  final Object toKey,
-                                  final boolean toIncl,
+    private Object boundedExtreme(final Comparable<? super K> minCmp,
+                                  final boolean minIncl,
+                                  final Comparable<? super K> maxCmp,
+                                  final boolean maxIncl,
                                   final boolean returnKey,
                                   final char dir) {
         K resultKey;
         Object result;
 
-        if ((dir == Left && fromKey == null) || (dir == Right && toKey == null)) {
+        if ((dir == Left && minCmp == null) || (dir == Right && maxCmp == null)) {
             // no bound in the extreme direction, so use the concurrent search
             result = extreme(returnKey, dir);
             if (result == null) {
@@ -627,8 +635,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             }
             try {
                 final Node<K,V> node = (dir == Left)
-                        ? boundedMin(holder.right, comparable(fromKey), fromIncl)
-                        : boundedMax(holder.right, comparable(toKey), toIncl);
+                        ? boundedMin(holder.right, minCmp, minIncl)
+                        : boundedMax(holder.right, maxCmp, maxIncl);
                 if (node == null) {
                     return null;
                 }
@@ -652,15 +660,15 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             }
         }
 
-        if (dir == Left && toKey != null) {
-            final int c = comparable(toKey).compareTo(resultKey);
-            if (c > 0 || (c == 0 && !toIncl)) {
+        if (dir == Left && maxCmp != null) {
+            final int c = maxCmp.compareTo(resultKey);
+            if (c > 0 || (c == 0 && !maxIncl)) {
                 return null;
             }
         }
-        if (dir == Right && fromKey != null) {
-            final int c = comparable(fromKey).compareTo(resultKey);
-            if (c < 0 || (c == 0 && !fromIncl)) {
+        if (dir == Right && minCmp != null) {
+            final int c = minCmp.compareTo(resultKey);
+            if (c < 0 || (c == 0 && !minIncl)) {
                 return null;
             }
         }
@@ -669,19 +677,19 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> boundedMin(Node<K,V> node,
-                                 final Comparable<? super K> fromCmp,
-                                 final boolean fromIncl) {
+                                 final Comparable<? super K> minCmp,
+                                 final boolean minIncl) {
         while (node != null) {
-            final int c = fromCmp.compareTo(node.key);
+            final int c = minCmp.compareTo(node.key);
             if (c < 0) {
                 // there may be a matching node on the left branch
-                final Node<K,V> z = boundedMin(node.left, fromCmp, fromIncl);
+                final Node<K,V> z = boundedMin(node.left, minCmp, minIncl);
                 if (z != null) {
                     return z;
                 }
             }
 
-            if (c < 0 || (c == 0 && fromIncl)) {
+            if (c < 0 || (c == 0 && minIncl)) {
                 // this node is a candidate, is it actually present?
                 if (node.vOpt != null) {
                     return node;
@@ -695,19 +703,19 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> boundedMax(Node<K,V> node,
-                                 final Comparable<? super K> toCmp,
-                                 final boolean toIncl) {
+                                 final Comparable<? super K> maxCmp,
+                                 final boolean maxIncl) {
         while (node != null) {
-            final int c = toCmp.compareTo(node.key);
+            final int c = maxCmp.compareTo(node.key);
             if (c > 0) {
                 // there may be a matching node on the right branch
-                final Node<K,V> z = boundedMax(node.right, toCmp, toIncl);
+                final Node<K,V> z = boundedMax(node.right, maxCmp, maxIncl);
                 if (z != null) {
                     return z;
                 }
             }
 
-            if (c > 0 || (c == 0 && toIncl)) {
+            if (c > 0 || (c == 0 && maxIncl)) {
                 // this node is a candidate, is it actually present?
                 if (node.vOpt != null) {
                     return node;
@@ -1685,16 +1693,22 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         @Override
         public Iterator<Entry<K,V>> iterator() {
-            return new EntryIter();
+            return new EntryIter<K,V>(SnapTreeMap.this);
         }
     }
 
-    private class EntryIter extends AbstractIter implements Iterator<Map.Entry<K,V>> {
-        private EntryIter() {
+    private static class EntryIter<K,V> extends AbstractIter<K,V> implements Iterator<Map.Entry<K,V>> {
+        private EntryIter(final SnapTreeMap<K,V> m) {
+            super(m);
         }
 
-        private EntryIter(final Object fromKey, final boolean fromIncl, final Object toKey, final boolean toIncl) {
-            super(fromKey, fromIncl, toKey, toIncl);
+        private EntryIter(final SnapTreeMap<K,V> m,
+                          final Comparable<? super K> minCmp,
+                          final boolean minIncl,
+                          final Comparable<? super K> maxCmp,
+                          final boolean maxIncl,
+                          final boolean descending) {
+            super(m, minCmp, minIncl, maxCmp, maxIncl, descending);
         }
 
         public Entry<K,V> next() {
@@ -1702,12 +1716,18 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
     }
 
-    private class KeyIter extends AbstractIter implements Iterator<K> {
-        private KeyIter() {
+    private static class KeyIter<K,V> extends AbstractIter<K,V> implements Iterator<K> {
+        private KeyIter(final SnapTreeMap<K,V> m) {
+            super(m);
         }
 
-        private KeyIter(final Object fromKey, final boolean fromIncl, final Object toKey, final boolean toIncl) {
-            super(fromKey, fromIncl, toKey, toIncl);
+        private KeyIter(final SnapTreeMap<K,V> m,
+                        final Comparable<? super K> minCmp,
+                        final boolean minIncl,
+                        final Comparable<? super K> maxCmp,
+                        final boolean maxIncl,
+                        final boolean descending) {
+            super(m, minCmp, minIncl, maxCmp, maxIncl, descending);
         }
 
         public K next() {
@@ -1715,73 +1735,98 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
     }
 
-    private class AbstractIter {
+    private static class AbstractIter<K,V> {
+        private final SnapTreeMap<K,V> m;
+        private final boolean descending;
+        private final char forward;
+        private final char reverse;
         private Node<K,V>[] path;
         private int depth = 0;
         private Node<K,V> mostRecentNode;
-        private Node<K,V> end;
+        private K endKey;
 
         @SuppressWarnings("unchecked")
-        AbstractIter() {
-            final Node<K,V> root = holderRef.frozen().right;
+        AbstractIter(final SnapTreeMap<K,V> m) {
+            this.m = m;
+            this.descending = false;
+            this.forward = Right;
+            this.reverse = Left;
+            final Node<K,V> root = m.holderRef.frozen().right;
             this.path = (Node<K,V>[]) new Node[1 + height(root)];
-            pushMin(root);
+            this.endKey = null;
+            pushFirst(root);
         }
 
-        AbstractIter(final Object fromKey,
-                     final boolean fromIncl,
-                     final Object toKey,
-                     final boolean toIncl) {
-            final Node<K,V> root = holderRef.frozen().right;
+        AbstractIter(final SnapTreeMap<K,V> m,
+                     final Comparable<? super K> minCmp,
+                     final boolean minIncl,
+                     final Comparable<? super K> maxCmp,
+                     final boolean maxIncl,
+                     final boolean descending) {
+            this.m = m;
+            this.descending = descending;
+            this.forward = !descending ? Right : Left;
+            this.reverse = !descending ? Left : Right;
+            final Comparable<? super K> fromCmp;
+            final boolean fromIncl = !descending ? minIncl : maxIncl;
+            final Comparable<? super K> toCmp;
+            final boolean toIncl = !descending ? maxIncl : minIncl;
+            if (!descending) {
+                fromCmp = minCmp;
+                toCmp = maxCmp;
+            } else {
+                fromCmp = maxCmp;
+                toCmp = minCmp;
+            }
 
-            Comparable<? super K> toCmp = null;
-            if (toKey != null) {
-                toCmp = comparable(toKey);
-                this.end = boundedMax(root.right, toCmp, toIncl);
-                if (this.end == null) {
+            final Node<K,V> root = m.holderRef.frozen().right;
+
+            if (toCmp != null) {
+                this.endKey = (K) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, true, forward);
+                if (this.endKey == null) {
                     // no node satisfies the bound, nothing to iterate
                     // ---------> EARLY EXIT
                     return;
                 }
+            } else {
+                this.endKey = null;
             }
 
             this.path = (Node<K,V>[]) new Node[1 + height(root)];
 
-            if (fromKey == null) {
-                pushMin(root);
+            if (fromCmp == null) {
+                pushFirst(root);
             }
             else {
-                pushMin(root, comparable(fromKey), fromIncl);
-                if (depth > 0 && toCmp != null) {
-                    final int c = toCmp.compareTo(top().key);
-                    if (c > 0 || (c == 0 && !toIncl)) {
-                        this.depth = 0;
-                        this.path = null;
-                        this.end = null;
-                        // -----------> EARLY EXIT
-                        return;
-                    }
-                }
-
+                pushFirst(root, fromCmp, fromIncl);
                 if (top().vOpt == null) {
                     advance();
                 }
             }
         }
 
-        private void pushMin(Node<K,V> node) {
-            while (node != null) {
-                path[depth++] = node;
-                node = node.left;
+        private int cmp(final Comparable<? super K> comparable, final K key) {
+            final int c = comparable.compareTo(key);
+            if (!descending) {
+                return c;
+            } else {
+                return c == Integer.MIN_VALUE ? 1 : -c;
             }
         }
 
-        private void pushMin(Node<K,V> node, final Comparable<? super K> fromCmp, final boolean fromIncl) {
+        private void pushFirst(Node<K,V> node) {
             while (node != null) {
-                final int c = fromCmp.compareTo(node.key);
+                path[depth++] = node;
+                node = node.child(reverse);
+            }
+        }
+
+        private void pushFirst(Node<K,V> node, final Comparable<? super K> fromCmp, final boolean fromIncl) {
+            while (node != null) {
+                final int c = cmp(fromCmp, node.key);
                 if (c < 0 || (c == 0 && !fromIncl)) {
                     // everything we're interested in is on the right
-                    node = node.right;
+                    node = node.child(forward);
                 }
                 else {
                     path[depth++] = node;
@@ -1790,7 +1835,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                         return;
                     }
                     else {
-                        node = node.left;
+                        node = node.child(reverse);
                     }
                 }
             }
@@ -1802,18 +1847,18 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         private void advance() {
             do {
-                final Node<K,V> right = top().right;
-                if (right != null) {
-                    pushMin(right);
+                final Node<K,V> fwd = top().child(forward);
+                if (fwd != null) {
+                    pushFirst(fwd);
                 } else {
                     // keep going up until we pop a node that is a left child
                     Node<K,V> popped;
                     do {
                         popped = path[--depth];
-                    } while (depth > 0 && popped == top().right);
+                    } while (depth > 0 && popped == top().child(forward));
                 }
 
-                if (end != null && end == top()) {
+                if (endKey != null && endKey == top().key) {
                     depth = 0;
                 }
                 if (depth == 0) {
@@ -1843,7 +1888,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (mostRecentNode == null) {
                 throw new IllegalStateException();
             }
-            SnapTreeMap.this.remove(mostRecentNode.key);
+            m.remove(mostRecentNode.key);
             mostRecentNode = null;
         }
     }
@@ -1854,7 +1899,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     public NavigableSet<K> navigableKeySet() {
         return new KeySet<K>(this) {
             public Iterator<K> iterator() {
-                return new KeyIter();
+                return new KeyIter<K,V>(SnapTreeMap.this);
             }
         };
     }
@@ -1901,8 +1946,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         public NavigableSet<K> descendingSet() { return map.descendingKeySet(); }
         public Iterator<K> descendingIterator() { return map.descendingKeySet().iterator(); }
 
-        public NavigableSet<K> subSet(final K fromElement, final boolean fromInclusive, final K toElement, final boolean toInclusive) {
-            return map.subMap(fromElement, fromInclusive, toElement, toInclusive).keySet();
+        public NavigableSet<K> subSet(final K fromElement, final boolean minInclusive, final K toElement, final boolean maxInclusive) {
+            return map.subMap(fromElement, minInclusive, toElement, maxInclusive).keySet();
         }
         public NavigableSet<K> headSet(final K toElement, final boolean inclusive) {
             return map.headMap(toElement, inclusive).keySet();
@@ -1924,27 +1969,21 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     //////////////// NavigableMap views
 
     @Override
-    public ConcurrentNavigableMap<K,V> subMap(final K fromKey, final boolean fromInclusive, final K toKey, final boolean toInclusive) {
-        if (fromKey == null || toKey == null) {
-            throw new NullPointerException();
-        }
-        return subMapImpl(fromKey, fromInclusive, toKey, toInclusive, false);
+    public ConcurrentNavigableMap<K,V> subMap(final K fromKey,
+                                              final boolean fromInclusive,
+                                              final K toKey,
+                                              final boolean toInclusive) {
+        return new SubMap(this, comparable(fromKey), fromInclusive, comparable(toKey), toInclusive, false);
     }
 
     @Override
     public ConcurrentNavigableMap<K,V> headMap(final K toKey, final boolean inclusive) {
-        if (toKey == null) {
-            throw new NullPointerException();
-        }
-        return subMapImpl(null, false, toKey, inclusive, false);
+        return new SubMap(this, null, false, comparable(toKey), inclusive, false);
     }
 
     @Override
     public ConcurrentNavigableMap<K,V> tailMap(final K fromKey, final boolean inclusive) {
-        if (fromKey == null) {
-            throw new NullPointerException();
-        }
-        return subMapImpl(fromKey, inclusive, null, false, false);
+        return new SubMap(this, comparable(fromKey), inclusive, null, false, false);
     }
 
     @Override
@@ -1964,15 +2003,394 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     @Override
     public ConcurrentNavigableMap<K,V> descendingMap() {
-        return subMapImpl(null, false, null, false, true);
+        return new SubMap(this, null, false, null, false, true);
     }
 
-    private ConcurrentNavigableMap<K,V> subMapImpl(final K fromKey,
-                                                   final boolean fromIncl,
-                                                   final K toKey,
-                                                   final boolean toIncl,
-                                                   final boolean descending) {
-        // TODO: implement
-        throw new UnsupportedOperationException();
+    private static class SubMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
+
+        private final SnapTreeMap<K,V> m;
+        private final Comparable<? super K> minCmp;
+        private final boolean minIncl;
+        private final Comparable<? super K> maxCmp;
+        private final boolean maxIncl;
+        private final boolean descending;
+
+        private SubMap(final SnapTreeMap<K, V> m,
+                       final Comparable<? super K> minCmp,
+                       final boolean minIncl,
+                       final Comparable<? super K> maxCmp,
+                       final boolean maxIncl,
+                       final boolean descending) {
+            this.m = m;
+            this.minCmp = minCmp;
+            this.minIncl = minIncl;
+            this.maxCmp = maxCmp;
+            this.maxIncl = maxIncl;
+            this.descending = descending;
+        }
+
+        private boolean tooLow(final K key) {
+            if (minCmp == null) {
+                return false;
+            } else {
+                final int c = minCmp.compareTo(key);
+                return c < 0 || (c == 0 && !minIncl);
+            }
+        }
+
+        private boolean tooHigh(final K key) {
+            if (maxCmp == null) {
+                return false;
+            } else {
+                final int c = maxCmp.compareTo(key);
+                return c > 0 || (c == 0 && !maxIncl);
+            }
+        }
+
+        private boolean inRange(final K key) {
+            return !tooLow(key) && !tooHigh(key);
+        }
+
+        private void requireInRange(final K key) {
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            if (!inRange(key)) {
+                throw new IllegalArgumentException();
+            }
+        }
+
+        private char minDir() {
+            return descending ? Right : Left;
+        }
+
+        private char maxDir() {
+            return descending ? Left : Right;
+        }
+
+        //////// AbstractMap
+
+        @Override
+        public boolean containsKey(final Object key) {
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final K k = (K) key;
+            return inRange(k) && m.containsKey(k);
+        }
+
+        @Override
+        public Set<Entry<K,V>> entrySet() {
+            return new EntrySubSet();
+        }
+
+        private class EntrySubSet extends AbstractSet<Map.Entry<K,V>> {
+            public int size() {
+                return SubMap.this.size();
+            }
+
+            @Override
+            public boolean isEmpty() {
+                return SubMap.this.isEmpty();
+            }
+
+            @Override
+            public boolean contains(final Object o) {
+                if (!(o instanceof Map.Entry<?,?>)) {
+                    return false;
+                }
+                final Object k = ((Map.Entry<?,?>)o).getKey();
+                if (!inRange((K) k)) {
+                    return false;
+                }
+                final Object v = ((Map.Entry<?,?>)o).getValue();
+                final Object actualVo = m.getImpl(k);
+                if (actualVo == null) {
+                    // no associated value
+                    return false;
+                }
+                final V actual = m.decodeNull(actualVo);
+                return v == null ? actual == null : v.equals(actual);
+            }
+
+            @Override
+            public boolean add(final Entry<K,V> e) {
+                requireInRange(e.getKey());
+                final Object v = encodeNull(e.getValue());
+                return m.update(e.getKey(), UpdateAlways, null, v) != v;
+            }
+
+            @Override
+            public boolean remove(final Object o) {
+                if (!(o instanceof Map.Entry<?,?>)) {
+                    return false;
+                }
+                final Object k = ((Map.Entry<?,?>)o).getKey();
+                final Object v = ((Map.Entry<?,?>)o).getValue();
+                return SubMap.this.remove(k, v);
+            }
+
+            @Override
+            public Iterator<Entry<K,V>> iterator() {
+                return new EntryIter(m, minCmp, minIncl, maxCmp, maxIncl, descending);
+            }
+        }
+
+        //////// SortedMap
+
+        @Override
+        public Comparator<? super K> comparator() {
+            final Comparator<? super K> fromM = m.comparator();
+            if (descending) {
+                return Collections.reverseOrder(fromM);
+            } else {
+                return fromM;
+            }
+        }
+
+        @Override
+        public K firstKey() {
+            return (K) m.boundedExtremeOrThrow(minCmp, minIncl, maxCmp, maxIncl, true, minDir());
+        }
+
+        @Override
+        public K lastKey() {
+            return (K) m.boundedExtremeOrThrow(minCmp, minIncl, maxCmp, maxIncl, true, maxDir());
+        }
+
+        //////// NavigableMap
+
+        @Override
+        public Entry<K,V> lowerEntry(final K key) {
+            if (!descending) {
+                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, false, Right);
+            } else {
+                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, false, Left);
+            }
+        }
+
+        @Override
+        public K lowerKey(final K key) {
+            if (!descending) {
+                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, true, Right);
+            } else {
+                return (K) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, true, Left);
+            }
+        }
+
+        @Override
+        public Entry<K,V> floorEntry(final K key) {
+            if (!descending) {
+                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, false, Right);
+            } else {
+                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, false, Left);
+            }
+        }
+
+        @Override
+        public K floorKey(final K key) {
+            if (!descending) {
+                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, true, Right);
+            } else {
+                return (K) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, true, Left);
+            }
+        }
+
+        @Override
+        public Entry<K,V> ceilingEntry(final K key) {
+            if (!descending) {
+                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, false, Left);
+            } else {
+                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, false, Right);
+            }
+        }
+
+        @Override
+        public K ceilingKey(final K key) {
+            if (!descending) {
+                return (K) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, true, Left);
+            } else {
+                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, true, Right);
+            }
+        }
+
+        @Override
+        public Entry<K,V> higherEntry(final K key) {
+            if (!descending) {
+                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, false, Left);
+            } else {
+                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, false, Right);
+            }
+        }
+
+        @Override
+        public K higherKey(final K key) {
+            if (!descending) {
+                return (K) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, true, Left);
+            } else {
+                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, true, Right);
+            }
+        }
+
+        @Override
+        public Entry<K,V> firstEntry() {
+            return (Entry<K,V>) m.boundedExtremeOrThrow(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
+        }
+
+        @Override
+        public Entry<K,V> lastEntry() {
+            return (Entry<K,V>) m.boundedExtremeOrThrow(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
+        }
+
+        @Override
+        public Entry<K,V> pollFirstEntry() {
+            while (true) {
+                final Entry<K,V> snapshot = (Entry<K, V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
+                if (snapshot == null || m.remove(snapshot.getKey(), snapshot.getValue())) {
+                    return snapshot;
+                }
+            }
+        }
+
+        @Override
+        public Entry<K, V> pollLastEntry() {
+            while (true) {
+                final Entry<K,V> snapshot = (Entry<K, V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
+                if (snapshot == null || m.remove(snapshot.getKey(), snapshot.getValue())) {
+                    return snapshot;
+                }
+            }
+        }
+
+        //////// ConcurrentMap
+
+        @Override
+        public V putIfAbsent(final K key, final V value) {
+            requireInRange(key);
+            return m.putIfAbsent(key, value);
+        }
+
+        @Override
+        public boolean remove(final Object key, final Object value) {
+            return inRange((K) key) && m.remove(key, value);
+        }
+
+        @Override
+        public boolean replace(final K key, final V oldValue, final V newValue) {
+            requireInRange(key);
+            return m.replace(key, oldValue, newValue);
+        }
+
+        @Override
+        public V replace(final K key, final V value) {
+            requireInRange(key);
+            return m.replace(key, value);
+        }
+
+        //////// ConcurrentNavigableMap
+
+        @Override
+        public ConcurrentNavigableMap<K,V> subMap(final K fromKey,
+                                                  final boolean fromInclusive,
+                                                  final K toKey,
+                                                  final boolean toInclusive) {
+            if (fromKey == null || toKey == null) {
+                throw new NullPointerException();
+            }
+            return subMapImpl(fromKey, fromInclusive, toKey, toInclusive);
+        }
+
+        @Override
+        public ConcurrentNavigableMap<K,V> headMap(final K toKey, final boolean inclusive) {
+            if (toKey == null) {
+                throw new NullPointerException();
+            }
+            return subMapImpl(null, false, toKey, inclusive);
+        }
+
+        @Override
+        public ConcurrentNavigableMap<K,V> tailMap(final K fromKey, final boolean inclusive) {
+            if (fromKey == null) {
+                throw new NullPointerException();
+            }
+            return subMapImpl(fromKey, inclusive, null, false);
+        }
+
+        @Override
+        public ConcurrentNavigableMap<K,V> subMap(final K fromKey, final K toKey) {
+            return subMap(fromKey, true, toKey, false);
+        }
+
+        @Override
+        public ConcurrentNavigableMap<K,V> headMap(final K toKey) {
+            return headMap(toKey, false);
+        }
+
+        @Override
+        public ConcurrentNavigableMap<K,V> tailMap(final K fromKey) {
+            return tailMap(fromKey, true);
+        }
+
+        private ConcurrentNavigableMap<K,V> subMapImpl(final K fromKey,
+                                                       final boolean fromIncl,
+                                                       final K toKey,
+                                                       final boolean toIncl) {
+            final K extraMinKey = !descending ? fromKey : toKey;
+            final boolean extraMinIncl = !descending ? fromIncl : toIncl;
+            final K extraMaxKey = !descending ? toKey : fromKey;
+            final boolean extraMaxIncl = !descending ? toIncl : fromIncl;
+
+            Comparable<? super K> newMinCmp = minCmp;
+            boolean newMinIncl = minIncl;
+            if (extraMinKey != null) {
+                final int c = minCmp == null ? 1 : minCmp.compareTo(extraMinKey);
+                if (c > 0) {
+                    newMinCmp = m.comparable(extraMinKey);
+                    newMinIncl = extraMinIncl;
+                }
+                else if (c == 0 && !extraMinIncl) {
+                    newMinIncl = false;
+                }
+            }
+
+            Comparable<? super K> newMaxCmp = maxCmp;
+            boolean newMaxIncl = maxIncl;
+            if (extraMaxKey != null) {
+                final int c = maxCmp == null ? -1 : maxCmp.compareTo(extraMaxKey);
+                if (c < 0) {
+                    newMaxCmp = m.comparable(extraMaxKey);
+                    newMaxIncl = extraMaxIncl;
+                }
+                else if (c == 0 && !extraMaxIncl) {
+                    newMaxIncl = false;
+                }
+            }
+
+            return new SubMap(m, newMinCmp, newMinIncl, newMaxCmp, newMaxIncl, descending);
+        }
+
+        @Override
+        public ConcurrentNavigableMap<K,V> descendingMap() {
+            return new SubMap(m, maxCmp, maxIncl, minCmp, minIncl, !descending);
+        }
+
+        @Override
+        public NavigableSet<K> keySet() {
+            return navigableKeySet();
+        }
+
+        @Override
+        public NavigableSet<K> navigableKeySet() {
+            return new KeySet<K>(m) {
+                public Iterator<K> iterator() {
+                    return new KeyIter(m, minCmp, minIncl, maxCmp, maxIncl, descending);
+                }
+            };
+        }
+
+        @Override
+        public NavigableSet<K> descendingKeySet() {
+            return descendingMap().navigableKeySet();
+        }
     }
 }
