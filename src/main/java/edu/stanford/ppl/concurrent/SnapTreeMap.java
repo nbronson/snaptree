@@ -8,7 +8,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentNavigableMap;
 
 // TODO: serialization
-// TODO: submap
+// TODO: submap.clone()
 // TODO: optimized buildFromSorted
 
 public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
@@ -203,6 +203,46 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return height;
         }
 
+        //////// SubMap.size() helper
+
+        static <K,V> int computeFrozenSize(Node<K,V> root,
+                                           Comparable<? super K> fromCmp,
+                                           boolean fromIncl,
+                                           final Comparable<? super K> toCmp,
+                                           final boolean toIncl) {
+            int result = 0;
+            while (true) {
+                if (root == null) {
+                    return result;
+                }
+                if (fromCmp != null) {
+                    final int c = fromCmp.compareTo(root.key);
+                    if (c > 0 || (c == 0 && !fromIncl)) {
+                        // all matching nodes are on the right side
+                        root = root.right;
+                        continue;
+                    }
+                }
+                if (toCmp != null) {
+                    final int c = toCmp.compareTo(root.key);
+                    if (c < 0 || (c == 0 && !fromIncl)) {
+                        // all matching nodes are on the left side
+                        root = root.left;
+                        continue;
+                    }
+                }
+
+                // Current node matches.  Nodes on left no longer need toCmp, nodes
+                // on right no longer need fromCmp.
+                if (root.vOpt != null) {
+                    ++result;
+                }
+                result += computeFrozenSize(root.left, fromCmp, fromIncl, null, false);
+                fromCmp = null;
+                root = root.right;
+            }
+        }
+
         //////// Map.Entry stuff
 
         public boolean equals(final Object o) {
@@ -225,7 +265,6 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         public String toString() {
             return key + "=" + getValue();
         }
-
     }
 
     private static class RootHolder<K,V> extends Node<K,V> {
@@ -1858,11 +1897,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                     } while (depth > 0 && popped == top().child(forward));
                 }
 
-                if (endKey != null && endKey == top().key) {
-                    depth = 0;
-                }
-                if (depth == 0) {
+                if (depth == 0 || (endKey != null && endKey == top().key)) {
                     // clear out the path so we don't pin too much stuff
+                    depth = 0;
                     path = null;
                     return;
                 }
@@ -1923,6 +1960,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         @Override
         public boolean contains(final Object o) { return map.containsKey(o); }
+        @Override
+        public boolean isEmpty() { return map.isEmpty(); }
         public int size() { return map.size(); }
         @Override
         public boolean remove(final Object o) { return map.remove(o) != null; }
@@ -2029,6 +2068,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             this.descending = descending;
         }
 
+        // TODO: clone
+
         private boolean tooLow(final K key) {
             if (minCmp == null) {
                 return false;
@@ -2069,6 +2110,17 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         //////// AbstractMap
+
+        @Override
+        public boolean isEmpty() {
+            return m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, true, Left) != null;
+        }
+
+        @Override
+        public int size() {
+            final Node<K,V> root = m.holderRef.frozen().right;
+            return Node.computeFrozenSize(root, minCmp, minIncl, maxCmp, maxIncl);
+        }
 
         @Override
         public boolean containsKey(final Object key) {
@@ -2381,7 +2433,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         @Override
         public NavigableSet<K> navigableKeySet() {
-            return new KeySet<K>(m) {
+            return new KeySet<K>(SubMap.this) {
                 public Iterator<K> iterator() {
                     return new KeyIter(m, minCmp, minIncl, maxCmp, maxIncl, descending);
                 }
