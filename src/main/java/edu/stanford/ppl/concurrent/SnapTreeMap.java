@@ -13,6 +13,8 @@ import java.util.concurrent.ConcurrentNavigableMap;
 
 public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
 
+    static final boolean AllowNullValues = false;
+
     /** This is a special value that indicates the presence of a null value,
      *  to differentiate from the absence of a value.
      */
@@ -93,7 +95,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         @SuppressWarnings("unchecked")
         public V getValue() {
             final Object tmp = vOpt;
-            return tmp == SpecialNull ? null : (V)tmp;
+            if (AllowNullValues) {
+               return tmp == SpecialNull ? null : (V)tmp;
+            } else {
+                return (V)tmp;
+            }
         }
 
         @Override
@@ -305,11 +311,22 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     @SuppressWarnings("unchecked")
     private V decodeNull(final Object vOpt) {
         assert (vOpt != SpecialRetry);
-        return vOpt == SpecialNull ? null : (V)vOpt;
+        if (AllowNullValues) {
+            return vOpt == SpecialNull ? null : (V)vOpt;
+        } else {
+            return (V)vOpt;
+        }
     }
 
     private static Object encodeNull(final Object v) {
-        return v == null ? SpecialNull : v;
+        if (AllowNullValues) {
+            return v == null ? SpecialNull : v;
+        } else {
+            if (v == null) {
+                throw new NullPointerException();
+            }
+            return v;
+        }
     }
 
     //////////////// state
@@ -385,9 +402,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     @Override
     public boolean containsValue(final Object value) {
-        if (value == null) {
-            throw new NullPointerException();
-        }
+        // apply the same null policy as the rest of the code, but fall
+        // back to the default implementation
+        encodeNull(value);
         return super.containsValue(value);
     }
 
@@ -818,6 +835,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     @Override
     public boolean remove(final Object key, final Object value) {
+        if (!AllowNullValues && value == null) {
+            return false;
+        }
         return update(key, UpdateIfEq, encodeNull(value), null) == encodeNull(value);
     }
 
@@ -2143,6 +2163,14 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             }
             final K k = (K) key;
             return inRange(k) && m.containsKey(k);
+        }
+
+        @Override
+        public boolean containsValue(final Object value) {
+            // apply the same null policy as the rest of the code, but fall
+            // back to the default implementation
+            encodeNull(value);
+            return super.containsValue(value);
         }
 
         @Override
