@@ -225,7 +225,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                 }
                 if (toCmp != null) {
                     final int c = toCmp.compareTo(root.key);
-                    if (c < 0 || (c == 0 && !fromIncl)) {
+                    if (c < 0 || (c == 0 && !toIncl)) {
                         // all matching nodes are on the left side
                         root = root.left;
                         continue;
@@ -381,6 +381,14 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     public Comparator<? super K> comparator() {
         return comparator;
+    }
+
+    @Override
+    public boolean containsValue(final Object value) {
+        if (value == null) {
+            throw new NullPointerException();
+        }
+        return super.containsValue(value);
     }
 
     //////// concurrent search
@@ -701,13 +709,13 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         if (dir == Left && maxCmp != null) {
             final int c = maxCmp.compareTo(resultKey);
-            if (c > 0 || (c == 0 && !maxIncl)) {
+            if (c < 0 || (c == 0 && !maxIncl)) {
                 return null;
             }
         }
         if (dir == Right && minCmp != null) {
             final int c = minCmp.compareTo(resultKey);
-            if (c < 0 || (c == 0 && !minIncl)) {
+            if (c > 0 || (c == 0 && !minIncl)) {
                 return null;
             }
         }
@@ -1838,7 +1846,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             }
             else {
                 pushFirst(root, fromCmp, fromIncl);
-                if (top().vOpt == null) {
+                if (depth > 0 && top().vOpt == null) {
                     advance();
                 }
             }
@@ -1863,7 +1871,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         private void pushFirst(Node<K,V> node, final Comparable<? super K> fromCmp, final boolean fromIncl) {
             while (node != null) {
                 final int c = cmp(fromCmp, node.key);
-                if (c < 0 || (c == 0 && !fromIncl)) {
+                if (c > 0 || (c == 0 && !fromIncl)) {
                     // everything we're interested in is on the right
                     node = node.child(forward);
                 }
@@ -1886,7 +1894,14 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         private void advance() {
             do {
-                final Node<K,V> fwd = top().child(forward);
+                final Node<K,V> t = top();
+                if (endKey != null && endKey == t.key) {
+                    depth = 0;
+                    path = null;
+                    return;
+                }
+
+                final Node<K,V> fwd = t.child(forward);
                 if (fwd != null) {
                     pushFirst(fwd);
                 } else {
@@ -1897,9 +1912,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                     } while (depth > 0 && popped == top().child(forward));
                 }
 
-                if (depth == 0 || (endKey != null && endKey == top().key)) {
+                if (depth == 0) {
                     // clear out the path so we don't pin too much stuff
-                    depth = 0;
                     path = null;
                     return;
                 }
@@ -2075,7 +2089,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                 return false;
             } else {
                 final int c = minCmp.compareTo(key);
-                return c < 0 || (c == 0 && !minIncl);
+                return c > 0 || (c == 0 && !minIncl);
             }
         }
 
@@ -2084,7 +2098,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                 return false;
             } else {
                 final int c = maxCmp.compareTo(key);
-                return c > 0 || (c == 0 && !maxIncl);
+                return c < 0 || (c == 0 && !maxIncl);
             }
         }
 
@@ -2113,7 +2127,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         @Override
         public boolean isEmpty() {
-            return m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, true, Left) != null;
+            return m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, true, Left) == null;
         }
 
         @Override
@@ -2129,6 +2143,29 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             }
             final K k = (K) key;
             return inRange(k) && m.containsKey(k);
+        }
+
+        @Override
+        public V get(final Object key) {
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final K k = (K) key;
+            return !inRange(k) ? null : m.get(k);
+        }
+
+        @Override
+        public V put(final K key, final V value) {
+            requireInRange(key);
+            return m.put(key, value);
+        }
+
+        @Override
+        public V remove(final Object key) {
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            return !inRange((K) key) ? null : m.remove(key);
         }
 
         @Override
@@ -2395,8 +2432,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             Comparable<? super K> newMinCmp = minCmp;
             boolean newMinIncl = minIncl;
             if (extraMinKey != null) {
-                final int c = minCmp == null ? 1 : minCmp.compareTo(extraMinKey);
-                if (c > 0) {
+                final int c = minCmp == null ? -1 : minCmp.compareTo(extraMinKey);
+                if (c < 0) {
                     newMinCmp = m.comparable(extraMinKey);
                     newMinIncl = extraMinIncl;
                 }
@@ -2408,8 +2445,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             Comparable<? super K> newMaxCmp = maxCmp;
             boolean newMaxIncl = maxIncl;
             if (extraMaxKey != null) {
-                final int c = maxCmp == null ? -1 : maxCmp.compareTo(extraMaxKey);
-                if (c < 0) {
+                final int c = maxCmp == null ? 1 : maxCmp.compareTo(extraMaxKey);
+                if (c > 0) {
                     newMaxCmp = m.comparable(extraMaxKey);
                     newMaxIncl = extraMaxIncl;
                 }
@@ -2423,7 +2460,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         @Override
         public ConcurrentNavigableMap<K,V> descendingMap() {
-            return new SubMap(m, maxCmp, maxIncl, minCmp, minIncl, !descending);
+            return new SubMap(m, minCmp, minIncl, maxCmp, maxIncl, !descending);
         }
 
         @Override
