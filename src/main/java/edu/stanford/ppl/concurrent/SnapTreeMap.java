@@ -8,11 +8,17 @@ import java.util.*;
 import java.util.concurrent.ConcurrentNavigableMap;
 
 // TODO: serialization
-// TODO: submap.clone()
 // TODO: optimized buildFromSorted
+// TODO: submap.clone()
 
 public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
 
+    /** If false, null values will trigger a NullPointerException.  When false,
+     *  this map acts exactly like a ConcurrentSkipListMap, except for the
+     *  running time of the methods.  The ability to get a snapshot reduces the
+     *  potential ambiguity between null values and absent entries, so I'm not
+     *  sure what the default should be.
+     */ 
     static final boolean AllowNullValues = false;
 
     /** This is a special value that indicates the presence of a null value,
