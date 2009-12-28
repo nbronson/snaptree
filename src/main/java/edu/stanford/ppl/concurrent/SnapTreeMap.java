@@ -2249,76 +2249,60 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         //////// NavigableMap
 
+        private K firstKeyOrNull() {
+            return (K) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, true, minDir());
+        }
+
+        private K lastKeyOrNull() {
+            return (K) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, true, maxDir());
+        }
+
+        private Entry<K,V> firstEntryOrNull() {
+            return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
+        }
+
+        private Entry<K,V> lastEntryOrNull() {
+            return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
+        }
+
         @Override
         public Entry<K,V> lowerEntry(final K key) {
-            if (!descending) {
-                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, false, Right);
-            } else {
-                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, false, Left);
-            }
+            return headMap(key, false).lastEntryOrNull();
         }
 
         @Override
         public K lowerKey(final K key) {
-            if (!descending) {
-                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, true, Right);
-            } else {
-                return (K) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, true, Left);
-            }
+            return headMap(key, false).lastKeyOrNull();
         }
 
         @Override
         public Entry<K,V> floorEntry(final K key) {
-            if (!descending) {
-                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, false, Right);
-            } else {
-                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, false, Left);
-            }
+            return headMap(key, true).lastEntryOrNull();
         }
 
         @Override
         public K floorKey(final K key) {
-            if (!descending) {
-                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, true, Right);
-            } else {
-                return (K) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, true, Left);
-            }
+            return headMap(key, true).lastKeyOrNull();
         }
 
         @Override
         public Entry<K,V> ceilingEntry(final K key) {
-            if (!descending) {
-                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, false, Left);
-            } else {
-                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, false, Right);
-            }
+            return tailMap(key, true).firstEntryOrNull();
         }
 
         @Override
         public K ceilingKey(final K key) {
-            if (!descending) {
-                return (K) m.boundedExtreme(m.comparable(key), true, maxCmp, maxIncl, true, Left);
-            } else {
-                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), true, true, Right);
-            }
+            return tailMap(key, true).firstKeyOrNull();
         }
 
         @Override
         public Entry<K,V> higherEntry(final K key) {
-            if (!descending) {
-                return (Entry<K,V>) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, false, Left);
-            } else {
-                return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, false, Right);
-            }
+            return tailMap(key, false).firstEntryOrNull();
         }
 
         @Override
         public K higherKey(final K key) {
-            if (!descending) {
-                return (K) m.boundedExtreme(m.comparable(key), false, maxCmp, maxIncl, true, Left);
-            } else {
-                return (K) m.boundedExtreme(minCmp, minIncl, m.comparable(key), false, true, Right);
-            }
+            return tailMap(key, false).firstKeyOrNull();
         }
 
         @Override
@@ -2379,10 +2363,10 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         //////// ConcurrentNavigableMap
 
         @Override
-        public ConcurrentNavigableMap<K,V> subMap(final K fromKey,
-                                                  final boolean fromInclusive,
-                                                  final K toKey,
-                                                  final boolean toInclusive) {
+        public SubMap<K,V> subMap(final K fromKey,
+                                  final boolean fromInclusive,
+                                  final K toKey,
+                                  final boolean toInclusive) {
             if (fromKey == null || toKey == null) {
                 throw new NullPointerException();
             }
@@ -2390,7 +2374,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         @Override
-        public ConcurrentNavigableMap<K,V> headMap(final K toKey, final boolean inclusive) {
+        public SubMap<K,V> headMap(final K toKey, final boolean inclusive) {
             if (toKey == null) {
                 throw new NullPointerException();
             }
@@ -2398,7 +2382,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         @Override
-        public ConcurrentNavigableMap<K,V> tailMap(final K fromKey, final boolean inclusive) {
+        public SubMap<K,V> tailMap(final K fromKey, final boolean inclusive) {
             if (fromKey == null) {
                 throw new NullPointerException();
             }
@@ -2406,24 +2390,24 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         @Override
-        public ConcurrentNavigableMap<K,V> subMap(final K fromKey, final K toKey) {
+        public SubMap<K,V> subMap(final K fromKey, final K toKey) {
             return subMap(fromKey, true, toKey, false);
         }
 
         @Override
-        public ConcurrentNavigableMap<K,V> headMap(final K toKey) {
+        public SubMap<K,V> headMap(final K toKey) {
             return headMap(toKey, false);
         }
 
         @Override
-        public ConcurrentNavigableMap<K,V> tailMap(final K fromKey) {
+        public SubMap<K,V> tailMap(final K fromKey) {
             return tailMap(fromKey, true);
         }
 
-        private ConcurrentNavigableMap<K,V> subMapImpl(final K fromKey,
-                                                       final boolean fromIncl,
-                                                       final K toKey,
-                                                       final boolean toIncl) {
+        private SubMap<K,V> subMapImpl(final K fromKey,
+                                       final boolean fromIncl,
+                                       final K toKey,
+                                       final boolean toIncl) {
             final K extraMinKey = !descending ? fromKey : toKey;
             final boolean extraMinIncl = !descending ? fromIncl : toIncl;
             final K extraMaxKey = !descending ? toKey : fromKey;
@@ -2459,7 +2443,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         @Override
-        public ConcurrentNavigableMap<K,V> descendingMap() {
+        public SubMap<K,V> descendingMap() {
             return new SubMap(m, minCmp, minIncl, maxCmp, maxIncl, !descending);
         }
 
