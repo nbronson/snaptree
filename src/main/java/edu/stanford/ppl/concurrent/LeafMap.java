@@ -3,8 +3,13 @@
 // LeafMap
 package edu.stanford.ppl.concurrent;
 
-/** A small hash table. */
+/** A small hash table.  The caller is responsible for synchronization in most
+ *  cases.
+ */
 class LeafMap<K,V> {
+    static final int MIN_CAPACITY = 8;
+    static final int MAX_CAPACITY = MIN_CAPACITY * 32; // TODO: SnapHashMap.BF;
+
     static class EntryImpl<K,V> {
         final K key;
         final int hash;
@@ -41,13 +46,13 @@ class LeafMap<K,V> {
     final float loadFactor;
 
     @SuppressWarnings("unchecked")
-    LeafMap(final int initialCapacity, final float loadFactor) {
-        this.table = (EntryImpl<K,V>[]) new EntryImpl[initialCapacity];
-        this.threshold = (int) (initialCapacity * loadFactor);
+    LeafMap(final float loadFactor) {
+        this.table = (EntryImpl<K,V>[]) new EntryImpl[MIN_CAPACITY];
+        this.threshold = (int) (MIN_CAPACITY * loadFactor);
         this.loadFactor = loadFactor;
     }
 
-    boolean containsKey(final K key, final int hash) {
+    boolean containsKeyU(final K key, final int hash) {
         if (uniq == 0) { // volatile read
             return false;
         }
@@ -66,9 +71,8 @@ class LeafMap<K,V> {
     }
 
     /** This is only valid for a quiesced map. */
-    boolean containsValue(final Object value) {
-        final EntryImpl<K,V>[] t = table;
-        for (EntryImpl<K,V> head : t) {
+    boolean containsValueQ(final Object value) {
+        for (EntryImpl<K,V> head : table) {
             EntryImpl<K,V> e = head;
             while (e != null) {
                 V v = e.value;
@@ -84,7 +88,7 @@ class LeafMap<K,V> {
         return false;
     }
 
-    V get(final K key, final int hash) {
+    V getU(final K key, final int hash) {
         if (uniq == 0) { // volatile read
             return null;
         }
@@ -102,44 +106,50 @@ class LeafMap<K,V> {
         return null;
     }
 
-    private void grow() {
-        rehash(table.length * 2);
+    private void growIfNecessaryL() {
+        if (uniq > threshold && table.length < MAX_CAPACITY) {
+            rehashL(table.length * 2);
+        }
     }
 
-    private void rehash(final int newSize) {
-        final EntryImpl<K,V>[] t = table;
-        final EntryImpl<K,V>[] n = (EntryImpl<K,V>[]) new EntryImpl[newSize];
-
-        for (EntryImpl<K,V> head : t) {
-            reputAll(n, head);
+    private void shrinkIfNecessaryL() {
+        if (uniq < (threshold >> 1) && table.length > MIN_CAPACITY) {
+            rehashL(table.length / 2);
         }
-        table = n;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void rehashL(final int newSize) {
         threshold = (int) (loadFactor * newSize);
-    }
-
-    private static <K,V> void reputAll(final EntryImpl<K,V>[] newTable, final EntryImpl<K,V> head) {
-        if (head != null) {
-            reputAll(newTable, head.next);
-            reput(newTable, head);
+        final EntryImpl<K,V>[] prevTable = table;
+        table = (EntryImpl<K,V>[]) new EntryImpl[newSize];
+        for (EntryImpl<K,V> head : prevTable) {
+            reputAllL(head);
         }
     }
 
-    private static <K,V> void reput(final EntryImpl<K,V>[] newTable, final EntryImpl<K,V> e) {
-        final int i = e.hash & (newTable.length - 1);
-        final EntryImpl<K,V> next = newTable[i];
+    private void reputAllL(final EntryImpl<K,V> head) {
+        if (head != null) {
+            reputAllL(head.next);
+            reputL(head);
+        }
+    }
+
+    private void reputL(final EntryImpl<K,V> e) {
+        final int i = e.hash & (table.length - 1);
+        final EntryImpl<K,V> next = table[i];
         if (e.next == next) {
             // no new entry needed
-            newTable[i] = e;
+            table[i] = e;
         } else {
-            newTable[i] = new EntryImpl<K,V>(e.key, e.hash, e.value, next);
+            table[i] = new EntryImpl<K,V>(e.key, e.hash, e.value, next);
         }
     }
 
-    synchronized V put(final K key, final int hash, final V value) {
-        final EntryImpl<K,V>[] t = table;
-        final int i = hash & (t.length - 1);
-        final EntryImpl<K,V> head = t[i];
-        EntryImpl<K,V> e = head;
+    V putL(final K key, final int hash, final V value) {
+        growIfNecessaryL();
+        final int i = hash & (table.length - 1);
+        EntryImpl<K,V> e = table[i];
         int insDelta = 1;
         while (e != null) {
             if (e.hash == hash) {
@@ -157,15 +167,15 @@ class LeafMap<K,V> {
             e = e.next;
         }
         // no match
-        t[i] = new EntryImpl<K,V>(key, hash, value, null);
+        table[i] = new EntryImpl<K,V>(key, hash, value, null);
         uniq += insDelta; // volatile store
         return null;
     }
 
-    synchronized V remove(final K key, final int hash) {
-        final EntryImpl<K,V>[] t = table;
-        final int i = hash & (t.length - 1);
-        final EntryImpl<K,V> head = t[i];
+    V removeL(final K key, final int hash) {
+        shrinkIfNecessaryL();
+        final int i = hash & (table.length - 1);
+        final EntryImpl<K,V> head = table[i];
         EntryImpl<K,V> e = head;
         int delDelta = -1;
         while (e != null) {
@@ -188,7 +198,7 @@ class LeafMap<K,V> {
 
                     // match
                     uniq += delDelta; // volatile store
-                    t[i] = head.withRemoved(target);
+                    table[i] = head.withRemoved(target);
                     return target.value;
                 }
                 // hash match, but not key match
@@ -202,11 +212,10 @@ class LeafMap<K,V> {
 
     //////// CAS-like
 
-    synchronized V putIfAbsent(final K key, final int hash, final V value) {
-        final EntryImpl<K,V>[] t = table;
-        final int i = hash & (t.length - 1);
-        final EntryImpl<K,V> head = t[i];
-        EntryImpl<K,V> e = head;
+    V putIfAbsentL(final K key, final int hash, final V value) {
+        growIfNecessaryL();
+        final int i = hash & (table.length - 1);
+        EntryImpl<K,V> e = table[i];
         int insDelta = 1;
         while (e != null) {
             if (e.hash == hash) {
@@ -221,16 +230,14 @@ class LeafMap<K,V> {
             e = e.next;
         }
         // no match
-        t[i] = new EntryImpl<K,V>(key, hash, value, null);
+        table[i] = new EntryImpl<K,V>(key, hash, value, null);
         uniq += insDelta; // volatile store
         return null;
     }
 
-    synchronized boolean replace(final K key, final int hash, final V oldValue, final V newValue) {
-        final EntryImpl<K,V>[] t = table;
-        final int i = hash & (t.length - 1);
-        final EntryImpl<K,V> head = t[i];
-        EntryImpl<K,V> e = head;
+    boolean replaceL(final K key, final int hash, final V oldValue, final V newValue) {
+        final int i = hash & (table.length - 1);
+        EntryImpl<K,V> e = table[i];
         while (e != null) {
             if (e.hash == hash && key.equals(e.key)) {
                 // key match
@@ -250,11 +257,9 @@ class LeafMap<K,V> {
         return false;
     }
 
-    synchronized V replace(final K key, final int hash, final V value) {
-        final EntryImpl<K,V>[] t = table;
-        final int i = hash & (t.length - 1);
-        final EntryImpl<K,V> head = t[i];
-        EntryImpl<K,V> e = head;
+    V replaceL(final K key, final int hash, final V value) {
+        final int i = hash & (table.length - 1);
+        EntryImpl<K,V> e = table[i];
         while (e != null) {
             if (e.hash == hash && key.equals(e.key)) {
                 // match
@@ -269,10 +274,10 @@ class LeafMap<K,V> {
         return null;
     }
 
-    synchronized boolean remove(final K key, final int hash, final V value) {
-        final EntryImpl<K,V>[] t = table;
-        final int i = hash & (t.length - 1);
-        final EntryImpl<K,V> head = t[i];
+    boolean removeL(final K key, final int hash, final V value) {
+        shrinkIfNecessaryL();
+        final int i = hash & (table.length - 1);
+        final EntryImpl<K,V> head = table[i];
         EntryImpl<K,V> e = head;
         int delDelta = -1;
         while (e != null) {
@@ -300,7 +305,7 @@ class LeafMap<K,V> {
 
                     // match
                     uniq += delDelta; // volatile store
-                    t[i] = head.withRemoved(target);
+                    table[i] = head.withRemoved(target);
                     return true;
                 }
                 // hash match, but not key match
@@ -314,12 +319,48 @@ class LeafMap<K,V> {
 
     //////// Leaf splitting
 
-    boolean shouldSplit() {
-        return uniq > 100; // TODO SPLIT_THRESHOLD;
+    boolean shouldSplitL() {
+        return uniq > threshold && table.length == MAX_CAPACITY;
     }
 
-    LeafMap<K,V>[] split(final int shift, final int bf) {
+    @SuppressWarnings("unchecked")
+    LeafMap<K,V>[] splitL(final int shift, final int bf) {
         final LeafMap<K,V>[] pieces = (LeafMap<K,V>[]) new LeafMap[bf];
-        
+        for (int i = 0; i < pieces.length; ++i) {
+            pieces[i] = new LeafMap<K,V>(loadFactor);
+        }
+        for (EntryImpl<K,V> head : table) {
+            scatterAllL(pieces, shift, head);
+        }
+        return pieces;
+    }
+
+    private static <K,V> void scatterAllL(final LeafMap<K,V>[] pieces, final int shift, final EntryImpl<K,V> head) {
+        if (head != null) {
+            scatterAllL(pieces, shift, head.next);
+            pieces[(head.hash >> shift) & (pieces.length - 1)].putL(head);
+        }
+    }
+
+    private void putL(final EntryImpl<K,V> entry) {
+        growIfNecessaryL();
+        final int i = entry.hash & (table.length - 1);
+        final EntryImpl<K,V> head = table[i];
+
+        // is this hash a duplicate?
+        EntryImpl<K,V> e = head;
+        while (e != null && e.hash != entry.hash) {
+            e = e.next;
+        }
+        if (e == null) {
+            ++uniq;
+        }
+
+        if (e.next == head) {
+            // no new entry needed
+            table[i] = e;
+        } else {
+            table[i] = new EntryImpl<K,V>(e.key, e.hash, e.value, head);
+        }
     }
 }
