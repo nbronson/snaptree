@@ -9,24 +9,29 @@ public class SnapHashMap<K,V> {
     private static final int BF = 1 << LOG_BF;
     private static final int BF_MASK = BF - 1;
 
+    static class Generation {
+    }
+
     static class Node<K,V> {
+        final Generation gen;
         final K key;
         final int hash;
         V value;
         final Node<K,V> next;
 
-        Node(final K key, final int hash, final V value, final Node<K,V> next) {
+        Node(final Generation gen, final K key, final int hash, final V value, final Node<K,V> next) {
+            this.gen = gen;
             this.key = key;
             this.hash = hash;
             this.value = value;
             this.next = next;
         }
 
-        Node<K,V> withRemoved(final Node<K,V> target) {
+        Node<K,V> withRemoved(final Generation gen, final Node<K,V> target) {
             if (this == target) {
                 return next;
             } else {
-                return new Node<K,V>(key, hash, value, next.withRemoved(target));
+                return new Node<K,V>(gen, key, hash, value, next.withRemoved(gen, target));
             }
         }
     }
@@ -37,6 +42,8 @@ public class SnapHashMap<K,V> {
     static class LeafMap<K,V> {
         static final int MIN_CAPACITY = 8;
         static final int MAX_CAPACITY = MIN_CAPACITY * BF;
+
+        final Generation gen;
 
         /** The number of unique hash codes recorded in this LeafMap.  This is also
          *  used to establish synchronization order, by reading in containsKey and
@@ -52,7 +59,8 @@ public class SnapHashMap<K,V> {
         final float loadFactor;
 
         @SuppressWarnings("unchecked")
-        LeafMap(final float loadFactor) {
+        LeafMap(final Generation gen, final float loadFactor) {
+            this.gen = gen;
             this.table = (Node<K,V>[]) new Node[MIN_CAPACITY];
             this.threshold = (int) (MIN_CAPACITY * loadFactor);
             this.loadFactor = loadFactor;
@@ -148,21 +156,28 @@ public class SnapHashMap<K,V> {
                 // no new entry needed
                 table[i] = e;
             } else {
-                table[i] = new Node<K,V>(e.key, e.hash, e.value, next);
+                table[i] = new Node<K,V>(gen, e.key, e.hash, e.value, next);
             }
         }
 
         V putL(final K key, final int hash, final V value) {
             growIfNecessaryL();
             final int i = hash & (table.length - 1);
-            Node<K,V> e = table[i];
+            final Node<K,V> head = table[i];
+            Node<K,V> e = head;
             int insDelta = 1;
             while (e != null) {
                 if (e.hash == hash) {
                     if (key.equals(e.key)) {
                         // match
                         final V prev = e.value;
-                        e.value = value;
+                        if (e.gen == gen) {
+                            // we have permission to mutate the node
+                            e.value = value;
+                        } else {
+                            // we must replace the node
+                            table[i] = new Node<K,V>(gen, key, hash, value, head.withRemoved(gen, e));
+                        }
                         uniq = uniq; // volatile store
                         return prev;
                     }
@@ -173,7 +188,7 @@ public class SnapHashMap<K,V> {
                 e = e.next;
             }
             // no match
-            table[i] = new Node<K,V>(key, hash, value, null);
+            table[i] = new Node<K,V>(gen, key, hash, value, head);
             uniq += insDelta; // volatile store
             return null;
         }
@@ -204,7 +219,7 @@ public class SnapHashMap<K,V> {
 
                         // match
                         uniq += delDelta; // volatile store
-                        table[i] = head.withRemoved(target);
+                        table[i] = head.withRemoved(gen, target);
                         return target.value;
                     }
                     // hash match, but not key match
@@ -221,7 +236,8 @@ public class SnapHashMap<K,V> {
         V putIfAbsentL(final K key, final int hash, final V value) {
             growIfNecessaryL();
             final int i = hash & (table.length - 1);
-            Node<K,V> e = table[i];
+            final Node<K,V> head = table[i];
+            Node<K,V> e = head;
             int insDelta = 1;
             while (e != null) {
                 if (e.hash == hash) {
@@ -236,20 +252,27 @@ public class SnapHashMap<K,V> {
                 e = e.next;
             }
             // no match
-            table[i] = new Node<K,V>(key, hash, value, null);
+            table[i] = new Node<K,V>(gen, key, hash, value, head);
             uniq += insDelta; // volatile store
             return null;
         }
 
         boolean replaceL(final K key, final int hash, final V oldValue, final V newValue) {
             final int i = hash & (table.length - 1);
-            Node<K,V> e = table[i];
+            final Node<K,V> head = table[i];
+            Node<K,V> e = head;
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     // key match
                     if (oldValue.equals(e.value)) {
                         // CAS success
-                        e.value = newValue;
+                        if (e.gen == gen) {
+                            // we have permission to mutate the node
+                            e.value = newValue;
+                        } else {
+                            // we must replace the node
+                            table[i] = new Node<K,V>(gen, key, hash, newValue, head.withRemoved(gen, e));
+                        }
                         uniq = uniq; // volatile store
                         return true;
                     } else {
@@ -265,12 +288,19 @@ public class SnapHashMap<K,V> {
 
         V replaceL(final K key, final int hash, final V value) {
             final int i = hash & (table.length - 1);
-            Node<K,V> e = table[i];
+            final Node<K,V> head = table[i];
+            Node<K,V> e = head;
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     // match
                     final V prev = e.value;
-                    e.value = value;
+                    if (e.gen == gen) {
+                        // we have permission to mutate the node
+                        e.value = value;
+                    } else {
+                        // we must replace the node
+                        table[i] = new Node<K,V>(gen, key, hash, value, head.withRemoved(gen, e));
+                    }
                     uniq = uniq; // volatile store
                     return prev;
                 }
@@ -311,7 +341,7 @@ public class SnapHashMap<K,V> {
 
                         // match
                         uniq += delDelta; // volatile store
-                        table[i] = head.withRemoved(target);
+                        table[i] = head.withRemoved(gen, target);
                         return true;
                     }
                     // hash match, but not key match
@@ -333,7 +363,7 @@ public class SnapHashMap<K,V> {
         LeafMap<K,V>[] splitL(final int shift, final int bf) {
             final LeafMap<K,V>[] pieces = (LeafMap<K,V>[]) new LeafMap[bf];
             for (int i = 0; i < pieces.length; ++i) {
-                pieces[i] = new LeafMap<K,V>(loadFactor);
+                pieces[i] = new LeafMap<K,V>(gen, loadFactor);
             }
             for (Node<K,V> head : table) {
                 scatterAllL(pieces, shift, head);
@@ -366,7 +396,7 @@ public class SnapHashMap<K,V> {
                 // no new entry needed
                 table[i] = e;
             } else {
-                table[i] = new Node<K,V>(e.key, e.hash, e.value, head);
+                table[i] = new Node<K,V>(gen, e.key, e.hash, e.value, head);
             }
         }
     }
