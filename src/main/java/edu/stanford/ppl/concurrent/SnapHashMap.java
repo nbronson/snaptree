@@ -12,14 +12,14 @@ public class SnapHashMap<K,V> {
     static class Generation {
     }
 
-    static class Node<K,V> {
+    static class HashEntry<K,V> {
         final Generation gen;
         final K key;
         final int hash;
         V value;
-        final Node<K,V> next;
+        final HashEntry<K,V> next;
 
-        Node(final Generation gen, final K key, final int hash, final V value, final Node<K,V> next) {
+        HashEntry(final Generation gen, final K key, final int hash, final V value, final HashEntry<K,V> next) {
             this.gen = gen;
             this.key = key;
             this.hash = hash;
@@ -27,11 +27,11 @@ public class SnapHashMap<K,V> {
             this.next = next;
         }
 
-        Node<K,V> withRemoved(final Generation gen, final Node<K,V> target) {
+        HashEntry<K,V> withRemoved(final Generation gen, final HashEntry<K,V> target) {
             if (this == target) {
                 return next;
             } else {
-                return new Node<K,V>(gen, key, hash, value, next.withRemoved(gen, target));
+                return new HashEntry<K,V>(gen, key, hash, value, next.withRemoved(gen, target));
             }
         }
     }
@@ -54,14 +54,14 @@ public class SnapHashMap<K,V> {
          *  help to restore the splitting condition.
          */
         volatile int uniq;
-        Node<K,V>[] table;
+        HashEntry<K,V>[] table;
         int threshold;
         final float loadFactor;
 
         @SuppressWarnings("unchecked")
         LeafMap(final Generation gen, final float loadFactor) {
             this.gen = gen;
-            this.table = (Node<K,V>[]) new Node[MIN_CAPACITY];
+            this.table = (HashEntry<K,V>[]) new HashEntry[MIN_CAPACITY];
             this.threshold = (int) (MIN_CAPACITY * loadFactor);
             this.loadFactor = loadFactor;
         }
@@ -70,7 +70,7 @@ public class SnapHashMap<K,V> {
             if (uniq == 0) { // volatile read
                 return false;
             }
-            Node<K,V> e = table[hash & (table.length - 1)];
+            HashEntry<K,V> e = table[hash & (table.length - 1)];
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     return true;
@@ -80,14 +80,14 @@ public class SnapHashMap<K,V> {
             return false;
         }
 
-        private synchronized V lockedReadValue(final Node<K,V> e) {
+        private synchronized V lockedReadValue(final HashEntry<K,V> e) {
             return e.value;
         }
 
         /** This is only valid for a quiesced map. */
         boolean containsValueQ(final Object value) {
-            for (Node<K,V> head : table) {
-                Node<K,V> e = head;
+            for (HashEntry<K,V> head : table) {
+                HashEntry<K,V> e = head;
                 while (e != null) {
                     V v = e.value;
                     if (v == null) {
@@ -106,7 +106,7 @@ public class SnapHashMap<K,V> {
             if (uniq == 0) { // volatile read
                 return null;
             }
-            Node<K,V> e = table[hash & (table.length - 1)];
+            HashEntry<K,V> e = table[hash & (table.length - 1)];
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     final V v = e.value;
@@ -135,36 +135,36 @@ public class SnapHashMap<K,V> {
         @SuppressWarnings("unchecked")
         private void rehashL(final int newSize) {
             threshold = (int) (loadFactor * newSize);
-            final Node<K,V>[] prevTable = table;
-            table = (Node<K,V>[]) new Node[newSize];
-            for (Node<K,V> head : prevTable) {
+            final HashEntry<K,V>[] prevTable = table;
+            table = (HashEntry<K,V>[]) new HashEntry[newSize];
+            for (HashEntry<K,V> head : prevTable) {
                 reputAllL(head);
             }
         }
 
-        private void reputAllL(final Node<K,V> head) {
+        private void reputAllL(final HashEntry<K,V> head) {
             if (head != null) {
                 reputAllL(head.next);
                 reputL(head);
             }
         }
 
-        private void reputL(final Node<K,V> e) {
+        private void reputL(final HashEntry<K,V> e) {
             final int i = e.hash & (table.length - 1);
-            final Node<K,V> next = table[i];
+            final HashEntry<K,V> next = table[i];
             if (e.next == next) {
                 // no new entry needed
                 table[i] = e;
             } else {
-                table[i] = new Node<K,V>(gen, e.key, e.hash, e.value, next);
+                table[i] = new HashEntry<K,V>(gen, e.key, e.hash, e.value, next);
             }
         }
 
         V putL(final K key, final int hash, final V value) {
             growIfNecessaryL();
             final int i = hash & (table.length - 1);
-            final Node<K,V> head = table[i];
-            Node<K,V> e = head;
+            final HashEntry<K,V> head = table[i];
+            HashEntry<K,V> e = head;
             int insDelta = 1;
             while (e != null) {
                 if (e.hash == hash) {
@@ -176,7 +176,7 @@ public class SnapHashMap<K,V> {
                             e.value = value;
                         } else {
                             // we must replace the node
-                            table[i] = new Node<K,V>(gen, key, hash, value, head.withRemoved(gen, e));
+                            table[i] = new HashEntry<K,V>(gen, key, hash, value, head.withRemoved(gen, e));
                         }
                         uniq = uniq; // volatile store
                         return prev;
@@ -188,7 +188,7 @@ public class SnapHashMap<K,V> {
                 e = e.next;
             }
             // no match
-            table[i] = new Node<K,V>(gen, key, hash, value, head);
+            table[i] = new HashEntry<K,V>(gen, key, hash, value, head);
             uniq += insDelta; // volatile store
             return null;
         }
@@ -196,14 +196,14 @@ public class SnapHashMap<K,V> {
         V removeL(final K key, final int hash) {
             shrinkIfNecessaryL();
             final int i = hash & (table.length - 1);
-            final Node<K,V> head = table[i];
-            Node<K,V> e = head;
+            final HashEntry<K,V> head = table[i];
+            HashEntry<K,V> e = head;
             int delDelta = -1;
             while (e != null) {
                 if (e.hash == hash) {
                     if (key.equals(e.key)) {
                         // match
-                        final Node<K, V> target = e;
+                        final HashEntry<K,V> target = e;
 
                         // continue the loop to get the right delDelta
                         if (delDelta != 0) {
@@ -236,8 +236,8 @@ public class SnapHashMap<K,V> {
         V putIfAbsentL(final K key, final int hash, final V value) {
             growIfNecessaryL();
             final int i = hash & (table.length - 1);
-            final Node<K,V> head = table[i];
-            Node<K,V> e = head;
+            final HashEntry<K,V> head = table[i];
+            HashEntry<K,V> e = head;
             int insDelta = 1;
             while (e != null) {
                 if (e.hash == hash) {
@@ -252,15 +252,15 @@ public class SnapHashMap<K,V> {
                 e = e.next;
             }
             // no match
-            table[i] = new Node<K,V>(gen, key, hash, value, head);
+            table[i] = new HashEntry<K,V>(gen, key, hash, value, head);
             uniq += insDelta; // volatile store
             return null;
         }
 
         boolean replaceL(final K key, final int hash, final V oldValue, final V newValue) {
             final int i = hash & (table.length - 1);
-            final Node<K,V> head = table[i];
-            Node<K,V> e = head;
+            final HashEntry<K,V> head = table[i];
+            HashEntry<K,V> e = head;
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     // key match
@@ -271,7 +271,7 @@ public class SnapHashMap<K,V> {
                             e.value = newValue;
                         } else {
                             // we must replace the node
-                            table[i] = new Node<K,V>(gen, key, hash, newValue, head.withRemoved(gen, e));
+                            table[i] = new HashEntry<K,V>(gen, key, hash, newValue, head.withRemoved(gen, e));
                         }
                         uniq = uniq; // volatile store
                         return true;
@@ -288,8 +288,8 @@ public class SnapHashMap<K,V> {
 
         V replaceL(final K key, final int hash, final V value) {
             final int i = hash & (table.length - 1);
-            final Node<K,V> head = table[i];
-            Node<K,V> e = head;
+            final HashEntry<K,V> head = table[i];
+            HashEntry<K,V> e = head;
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     // match
@@ -299,7 +299,7 @@ public class SnapHashMap<K,V> {
                         e.value = value;
                     } else {
                         // we must replace the node
-                        table[i] = new Node<K,V>(gen, key, hash, value, head.withRemoved(gen, e));
+                        table[i] = new HashEntry<K,V>(gen, key, hash, value, head.withRemoved(gen, e));
                     }
                     uniq = uniq; // volatile store
                     return prev;
@@ -313,8 +313,8 @@ public class SnapHashMap<K,V> {
         boolean removeL(final K key, final int hash, final V value) {
             shrinkIfNecessaryL();
             final int i = hash & (table.length - 1);
-            final Node<K,V> head = table[i];
-            Node<K,V> e = head;
+            final HashEntry<K,V> head = table[i];
+            HashEntry<K,V> e = head;
             int delDelta = -1;
             while (e != null) {
                 if (e.hash == hash) {
@@ -325,7 +325,7 @@ public class SnapHashMap<K,V> {
                             return false;
                         }
 
-                        final Node<K, V> target = e;
+                        final HashEntry<K,V> target = e;
 
                         // continue the loop to get the right delDelta
                         if (delDelta != 0) {
@@ -365,26 +365,26 @@ public class SnapHashMap<K,V> {
             for (int i = 0; i < pieces.length; ++i) {
                 pieces[i] = new LeafMap<K,V>(gen, loadFactor);
             }
-            for (Node<K,V> head : table) {
+            for (HashEntry<K,V> head : table) {
                 scatterAllL(pieces, shift, head);
             }
             return pieces;
         }
 
-        private static <K,V> void scatterAllL(final LeafMap<K,V>[] pieces, final int shift, final Node<K,V> head) {
+        private static <K,V> void scatterAllL(final LeafMap<K,V>[] pieces, final int shift, final HashEntry<K,V> head) {
             if (head != null) {
                 scatterAllL(pieces, shift, head.next);
                 pieces[(head.hash >> shift) & (pieces.length - 1)].putL(head);
             }
         }
 
-        private void putL(final Node<K,V> entry) {
+        private void putL(final HashEntry<K,V> entry) {
             growIfNecessaryL();
             final int i = entry.hash & (table.length - 1);
-            final Node<K,V> head = table[i];
+            final HashEntry<K,V> head = table[i];
 
             // is this hash a duplicate?
-            Node<K,V> e = head;
+            HashEntry<K,V> e = head;
             while (e != null && e.hash != entry.hash) {
                 e = e.next;
             }
@@ -396,7 +396,7 @@ public class SnapHashMap<K,V> {
                 // no new entry needed
                 table[i] = e;
             } else {
-                table[i] = new Node<K,V>(gen, e.key, e.hash, e.value, head);
+                table[i] = new HashEntry<K,V>(gen, e.key, e.hash, e.value, head);
             }
         }
     }
