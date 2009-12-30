@@ -46,8 +46,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
      *  cases.
      */
     static class LeafMap<K,V> {
+        // we would prefer BF LeafMap of MIN_CAPACITY to a grow of a leaf at MAX_CAPACITY
         static final int MIN_CAPACITY = 8;
-        static final int MAX_CAPACITY = MIN_CAPACITY * BF;
+        static final int MAX_CAPACITY = MIN_CAPACITY * BF / 2;
 
         /** Set to null when this LeafMap is split into pieces. */
         Generation gen;
@@ -691,7 +692,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         return rootHolder.read().get((K) key, hash(key.hashCode()));
     }
 
-    public V put(final K key, final int hash, final V value) {
+    public V put(final K key, final V value) {
         if (key == null || value == null) {
             throw new NullPointerException();
         }
@@ -734,7 +735,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         int sizeDelta = 0;
         try {
-            final V prev = rootHolder.mutable().put(key, hash(key.hashCode()), value);
+            final V prev = rootHolder.mutable().putIfAbsent(key, hash(key.hashCode()), value);
             if (prev == null) {
                 sizeDelta = 1;
             }
@@ -869,22 +870,98 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    //TODO: implement
-    //TODO: implement
-    //TODO: implement
-    //TODO: implement
-    //TODO: implement
     static abstract class AbstractIter<K,V> {
-        AbstractIter(final BranchMap<K,V> frozenRoot) {
 
+        private final BranchMap<K,V> root;
+        private Stack<Integer> branchIndices = new Stack<Integer>();
+        private LeafMap<K,V> currentLeaf;
+        private HashEntry<K,V> currentEntry;
+
+        AbstractIter(final BranchMap<K,V> frozenRoot) {
+            this.root = frozenRoot;
+            pushMin(frozenRoot, 0);
         }
 
-        public boolean hasNext() {
+        private boolean pushMin(final BranchMap<K,V> branch, final int minIndex) {
+            for (int i = minIndex; i < BF; ++i) {
+                final Object child = branch.get(i);
+                if (child != null) {
+                    if (child instanceof LeafMap) {
+                        final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                        if (leaf.uniq > 0) {
+                            // success!
+                            branchIndices.push(i);
+                            currentLeaf = leaf;
+                            for (HashEntry<K,V> e : leaf.table) {
+                                if (e != null) {
+                                    currentEntry = e;
+                                    return true;
+                                }
+                            }
+                            throw new Error("logic error");
+                        }
+                    } else {
+                        branchIndices.push(i);
+                        if (pushMin((BranchMap<K,V>) branch, 0)) {
+                            return true;
+                        }
+                        branchIndices.pop();
+                    }
+                }
+            }
             return false;
         }
 
+        private void advance() {
+            // advance within a bucket chain
+            if (currentEntry.next != null) {
+                // easy
+                currentEntry = currentEntry.next;
+                return;
+            }
+
+            // advance to the next non-empty chain
+            int i = (currentEntry.hash & (currentLeaf.table.length - 1)) + 1;
+            while (i < currentLeaf.table.length) {
+                if (currentLeaf.table[i] != null) {
+                    currentEntry = currentLeaf.table[i];
+                    return;
+                }
+                ++i;
+            }
+
+            // now we are moving between LeafMap-s
+            while (!branchIndices.isEmpty()) {
+                i = branchIndices.pop() + 1;
+                final BranchMap<K,V> branch = findBranch();
+                if (pushMin(findBranch(), i)) {
+                    return;
+                }
+            }
+
+            // we're done
+            currentEntry = null;
+        }
+
+        private BranchMap<K,V> findBranch() {
+            BranchMap<K,V> result = root;
+            for (Integer i : branchIndices) {
+                result = (BranchMap<K,V>) result.get(i);
+            }
+            return result;
+        }
+
+        public boolean hasNext() {
+            return currentEntry != null;
+        }
+
         HashEntry<K,V> nextEntry() {
-            return null;
+            if (currentEntry == null) {
+                throw new IllegalStateException();
+            }
+            final HashEntry<K,V> result = currentEntry;
+            advance();
+            return result;
         }
 
         public void remove() {
