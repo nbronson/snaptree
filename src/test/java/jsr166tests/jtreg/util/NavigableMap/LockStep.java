@@ -72,6 +72,10 @@ public class LockStep {
     }
 
     static void lockSteps(NavigableMap m1, NavigableMap m2) {
+        System.out.println("--------------");
+        System.out.println("m1 is a " + m1.getClass().getName());
+        System.out.println("m2 is a " + m2.getClass().getName());
+
         if (maybe(4)) m1 = serialClone(m1);
         if (maybe(4)) m2 = serialClone(m2);
         lockStep(m1,
