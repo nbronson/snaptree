@@ -3,9 +3,11 @@
 // LeafMap
 package edu.stanford.ppl.concurrent;
 
+import java.util.*;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
-public class SnapHashMap<K,V> {
+public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V> {
 
     private static final int LOG_BF = 4;
     private static final int BF = 1 << LOG_BF;
@@ -634,6 +636,290 @@ public class SnapHashMap<K,V> {
                 }
             }
             return unsharedBranch(hash, child).remove(key, hash, value);
+        }
+    }
+
+    static class COWMgr<K,V> extends CopyOnWriteManager<BranchMap<K,V>> {
+        COWMgr() {
+            super(new BranchMap<K,V>(new Generation(), LOG_BF), 0);
+        }
+
+        protected BranchMap<K, V> freezeAndClone(final BranchMap<K,V> value) {
+            return value.cloneForWrite(new Generation());
+        }
+
+        protected BranchMap<K, V> cloneFrozen(final BranchMap<K,V> frozenValue) {
+            return frozenValue.cloneForWrite(new Generation());
+        }
+    }
+
+    private volatile COWMgr<K,V> rootHolder = new COWMgr<K,V>();
+
+    private static int hash(int h) {
+        // taken from ConcurrentHashMap
+        h += (h <<  15) ^ 0xffffcd7d;
+        h ^= (h >>> 10);
+        h += (h <<   3);
+        h ^= (h >>>  6);
+        h += (h <<   2) + (h << 14);
+        return h ^ (h >>> 16);
+    }
+
+    //////// construction and cloning
+
+    // TODO: implement clone()
+
+    //////// public interface
+
+    public boolean isEmpty() {
+        return rootHolder.isEmpty();
+    }
+
+    public int size() {
+        return rootHolder.size();
+    }
+
+    public boolean containsKey(final Object key) {
+        return rootHolder.read().containsKey((K) key, hash(key.hashCode()));
+    }
+
+    public boolean containsValue(final Object value) {
+        return rootHolder.frozen().containsValueQ(value);
+    }
+
+    public V get(final Object key) {
+        return rootHolder.read().get((K) key, hash(key.hashCode()));
+    }
+
+    public V put(final K key, final int hash, final V value) {
+        if (key == null || value == null) {
+            throw new NullPointerException();
+        }
+        final Epoch.Ticket ticket = rootHolder.beginMutation();
+        int sizeDelta = 0;
+        try {
+            final V prev = rootHolder.mutable().put(key, hash(key.hashCode()), value);
+            if (prev == null) {
+                sizeDelta = 1;
+            }
+            return prev;
+        } finally {
+            ticket.leave(sizeDelta);
+        }
+    }
+
+    public V remove(final Object key) {
+        if (key == null) {
+            return null;
+        }
+        final Epoch.Ticket ticket = rootHolder.beginMutation();
+        int sizeDelta = 0;
+        try {
+            final V prev = rootHolder.mutable().remove((K) key, hash(key.hashCode()));
+            if (prev != null) {
+                sizeDelta = -1;
+            }
+            return prev;
+        } finally {
+            ticket.leave(sizeDelta);
+        }
+    }
+
+    //////// CAS-like
+
+    public V putIfAbsent(final K key, final V value) {
+        if (key == null || value == null) {
+            throw new NullPointerException();
+        }
+        final Epoch.Ticket ticket = rootHolder.beginMutation();
+        int sizeDelta = 0;
+        try {
+            final V prev = rootHolder.mutable().put(key, hash(key.hashCode()), value);
+            if (prev == null) {
+                sizeDelta = 1;
+            }
+            return prev;
+        } finally {
+            ticket.leave(sizeDelta);
+        }
+    }
+
+    public boolean replace(final K key, final V oldValue, final V newValue) {
+        if (key == null || oldValue == null || newValue == null) {
+            throw new NullPointerException();
+        }
+        final Epoch.Ticket ticket = rootHolder.beginMutation();
+        try {
+            return rootHolder.mutable().replace(key, hash(key.hashCode()), oldValue, newValue);
+        } finally {
+            ticket.leave(0);
+        }
+    }
+
+    public V replace(final K key, final V value) {
+        if (key == null || value == null) {
+            throw new NullPointerException();
+        }
+        final Epoch.Ticket ticket = rootHolder.beginMutation();
+        try {
+            return rootHolder.mutable().replace(key, hash(key.hashCode()), value);
+        } finally {
+            ticket.leave(0);
+        }
+    }
+
+    public boolean remove(final Object key, final Object value) {
+        if (key == null) {
+            throw new NullPointerException();
+        }
+        if (value == null) {
+            return false;
+        }
+        final Epoch.Ticket ticket = rootHolder.beginMutation();
+        int sizeDelta = 0;
+        try {
+            final boolean result = rootHolder.mutable().remove((K) key, hash(key.hashCode()), (V) value);
+            if (result) {
+                sizeDelta = -1;
+            }
+            return result;
+        } finally {
+            ticket.leave(sizeDelta);
+        }
+    }
+
+    public Set<K> keySet() {
+        return new KeySet();
+    }
+
+    public Collection<V> values() {
+        return new Values();
+    }
+
+    public Set<Entry<K,V>> entrySet() {
+        return new EntrySet();
+    }
+
+    //////// Map support classes
+
+    class KeySet extends AbstractSet<K> {
+        public Iterator<K> iterator() {
+            return new KeyIterator(rootHolder.frozen());
+        }
+        public boolean isEmpty() {
+            return SnapHashMap.this.isEmpty();
+        }
+        public int size() {
+            return SnapHashMap.this.size();
+        }
+        public boolean contains(Object o) {
+            return SnapHashMap.this.containsKey(o);
+        }
+        public boolean remove(Object o) {
+            return SnapHashMap.this.remove(o) != null;
+        }
+        public void clear() {
+            SnapHashMap.this.clear();
+        }
+    }
+
+    final class Values extends AbstractCollection<V> {
+        public Iterator<V> iterator() {
+            return new ValueIterator(rootHolder.frozen());
+        }
+        public boolean isEmpty() {
+            return SnapHashMap.this.isEmpty();
+        }
+        public int size() {
+            return SnapHashMap.this.size();
+        }
+        public boolean contains(Object o) {
+            return SnapHashMap.this.containsValue(o);
+        }
+        public void clear() {
+            SnapHashMap.this.clear();
+        }
+    }
+
+    final class EntrySet extends AbstractSet<Map.Entry<K,V>> {
+        public Iterator<Map.Entry<K,V>> iterator() {
+            return new EntryIterator(rootHolder.frozen());
+        }
+        public boolean contains(Object o) {
+            if (!(o instanceof Map.Entry))
+                return false;
+            Map.Entry<?,?> e = (Map.Entry<?,?>)o;
+            V v = SnapHashMap.this.get(e.getKey());
+            return v != null && v.equals(e.getValue());
+        }
+        public boolean remove(Object o) {
+            if (!(o instanceof Map.Entry))
+                return false;
+            Map.Entry<?,?> e = (Map.Entry<?,?>)o;
+            return SnapHashMap.this.remove(e.getKey(), e.getValue());
+        }
+        public boolean isEmpty() {
+            return SnapHashMap.this.isEmpty();
+        }
+        public int size() {
+            return SnapHashMap.this.size();
+        }
+        public void clear() {
+            SnapHashMap.this.clear();
+        }
+    }
+
+    //TODO: implement
+    //TODO: implement
+    //TODO: implement
+    //TODO: implement
+    //TODO: implement
+    static abstract class AbstractIter<K,V> {
+        AbstractIter(final BranchMap<K,V> frozenRoot) {
+
+        }
+
+        public boolean hasNext() {
+            return false;
+        }
+
+        HashEntry<K,V> nextEntry() {
+            return null;
+        }
+
+        public void remove() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    final static class KeyIterator<K,V> extends AbstractIter<K,V> implements Iterator<K> {
+        KeyIterator(final BranchMap<K, V> frozenRoot) {
+            super(frozenRoot);
+        }
+
+        public K next() {
+            return nextEntry().key;
+        }
+    }
+
+    final static class ValueIterator<K,V> extends AbstractIter<K,V> implements Iterator<V> {
+        ValueIterator(final BranchMap<K, V> frozenRoot) {
+            super(frozenRoot);
+        }
+
+        public V next() {
+            return nextEntry().value;
+        }
+    }
+
+    final static class EntryIterator<K,V> extends AbstractIter<K,V> implements Iterator<Map.Entry<K,V>> {
+        EntryIterator(final BranchMap<K, V> frozenRoot) {
+            super(frozenRoot);
+        }
+
+        public Map.Entry<K,V> next() {
+            final HashEntry<K,V> e = nextEntry();
+            return new SimpleImmutableEntry<K,V>(e.key, e.value);
         }
     }
 }
