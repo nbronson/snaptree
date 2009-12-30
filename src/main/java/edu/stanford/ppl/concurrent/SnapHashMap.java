@@ -3,11 +3,15 @@
 // LeafMap
 package edu.stanford.ppl.concurrent;
 
+import java.util.concurrent.atomic.AtomicReferenceArray;
+
 public class SnapHashMap<K,V> {
 
     private static final int LOG_BF = 4;
     private static final int BF = 1 << LOG_BF;
     private static final int BF_MASK = BF - 1;
+    private static final int maxLoad(final int capacity) { return capacity - (capacity >> 2); /* 0.75 */ }
+    private static final int minLoad(final int capacity) { return (capacity >> 2); /* 0.25 */ }
 
     static class Generation {
     }
@@ -43,7 +47,9 @@ public class SnapHashMap<K,V> {
         static final int MIN_CAPACITY = 8;
         static final int MAX_CAPACITY = MIN_CAPACITY * BF;
 
-        final Generation gen;
+        /** Set to null when this LeafMap is split into pieces. */
+        Generation gen;
+        HashEntry<K,V>[] table;
 
         /** The number of unique hash codes recorded in this LeafMap.  This is also
          *  used to establish synchronization order, by reading in containsKey and
@@ -54,16 +60,26 @@ public class SnapHashMap<K,V> {
          *  help to restore the splitting condition.
          */
         volatile int uniq;
-        HashEntry<K,V>[] table;
-        int threshold;
-        final float loadFactor;
 
         @SuppressWarnings("unchecked")
-        LeafMap(final Generation gen, final float loadFactor) {
+        LeafMap(final Generation gen) {
             this.gen = gen;
             this.table = (HashEntry<K,V>[]) new HashEntry[MIN_CAPACITY];
-            this.threshold = (int) (MIN_CAPACITY * loadFactor);
-            this.loadFactor = loadFactor;
+            this.uniq = 0;
+        }
+
+        private LeafMap(final Generation gen, final LeafMap src) {
+            this.gen = gen;
+            this.table = (HashEntry<K,V>[]) src.table.clone();
+            this.uniq = src.uniq;
+        }
+
+        LeafMap cloneForWriteL(final Generation gen) {
+            return new LeafMap(gen, this);
+        }
+
+        boolean hasSplitL() {
+            return gen == null;
         }
 
         boolean containsKeyU(final K key, final int hash) {
@@ -121,20 +137,23 @@ public class SnapHashMap<K,V> {
         }
 
         private void growIfNecessaryL() {
-            if (uniq > threshold && table.length < MAX_CAPACITY) {
-                rehashL(table.length * 2);
+            assert(!hasSplitL());
+            final int n = table.length;
+            if (n < MAX_CAPACITY && uniq > maxLoad(n)) {
+                rehashL(n << 1);
             }
         }
 
         private void shrinkIfNecessaryL() {
-            if (uniq < (threshold >> 1) && table.length > MIN_CAPACITY) {
-                rehashL(table.length / 2);
+            assert(!hasSplitL());
+            final int n = table.length;
+            if (n > MIN_CAPACITY && uniq < minLoad(n)) {
+                rehashL(n >> 1);
             }
         }
 
         @SuppressWarnings("unchecked")
         private void rehashL(final int newSize) {
-            threshold = (int) (loadFactor * newSize);
             final HashEntry<K,V>[] prevTable = table;
             table = (HashEntry<K,V>[]) new HashEntry[newSize];
             for (HashEntry<K,V> head : prevTable) {
@@ -356,18 +375,23 @@ public class SnapHashMap<K,V> {
         //////// Leaf splitting
 
         boolean shouldSplitL() {
-            return uniq > threshold && table.length == MAX_CAPACITY;
+            return uniq > maxLoad(MAX_CAPACITY);
         }
 
         @SuppressWarnings("unchecked")
-        LeafMap<K,V>[] splitL(final int shift, final int bf) {
-            final LeafMap<K,V>[] pieces = (LeafMap<K,V>[]) new LeafMap[bf];
+        LeafMap<K,V>[] splitL(final int shift) {
+            assert(!hasSplitL());
+
+            final LeafMap<K,V>[] pieces = (LeafMap<K,V>[]) new LeafMap[BF];
             for (int i = 0; i < pieces.length; ++i) {
-                pieces[i] = new LeafMap<K,V>(gen, loadFactor);
+                pieces[i] = new LeafMap<K,V>(gen);
             }
             for (HashEntry<K,V> head : table) {
                 scatterAllL(pieces, shift, head);
             }
+
+            gen = null; // this marks us as split
+
             return pieces;
         }
 
@@ -399,5 +423,125 @@ public class SnapHashMap<K,V> {
                 table[i] = new HashEntry<K,V>(gen, e.key, e.hash, e.value, head);
             }
         }
+    }
+
+    static class BranchMap<K,V> extends AtomicReferenceArray<Object> {
+        final Generation gen;
+        final int shift;
+
+        BranchMap(final Generation gen, final int shift) {
+            super(BF);
+            this.gen = gen;
+            this.shift = shift;
+        }
+
+        BranchMap(final Generation gen, final int shift, final Object[] children) {
+            super(children);
+            this.gen = gen;
+            this.shift = shift;
+        }
+
+        boolean containsKey(final K key, final int hash) {
+            final Object child = getChild(hash);
+            if (child instanceof LeafMap) {
+                return ((LeafMap<K,V>) child).containsKeyU(key, hash);
+            } else {
+                return ((BranchMap<K,V>) child).containsKey(key, hash);
+            }
+        }
+
+        private Object getChild(final int hash) {
+            final int i = indexFor(hash);
+            Object result = get(i);
+            if (result == null) {
+                // try to create the leaf
+                result = new LeafMap<K,V>(gen);
+                if (!compareAndSet(i, null, result)) {
+                    // someone else succeeded
+                    result = get(i);
+                }
+            }
+            return result;
+        }
+
+        private int indexFor(final int hash) {
+            return (hash >> shift) & BF_MASK;
+        }
+
+        /** This is only valid for a quiesced map. */
+        boolean containsValueQ(final Object value) {
+            for (int i = 0; i < BF; ++i) {
+                final Object child = get(i);
+                if (child instanceof LeafMap) {
+                    if (((LeafMap<K,V>) child).containsValueQ(value)) {
+                        return true;
+                    }
+                } else {
+                    if (((BranchMap<K,V>) child).containsValueQ(value)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        V get(final K key, final int hash) {
+            final Object child = getChild(hash);
+            if (child instanceof LeafMap) {
+                return ((LeafMap<K,V>) child).getU(key, hash);
+            } else {
+                return ((BranchMap<K,V>) child).get(key, hash);
+            }
+        }
+
+        V put(final K key, final int hash, final V value) {
+            Object child = getChild(hash);
+            final int i = indexFor(hash);
+            while (true) {
+                if (child instanceof LeafMap) {
+                    final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                    synchronized (leaf) {
+                        if (leaf.hasSplitL()) {
+                            // leaf was split between our getChild and our lock, reread
+                            child = get(i);
+                        } else if (leaf.shouldSplitL()) {
+                            // no need to CAS, because everyone is using the lock
+                            final int newShift = shift + LOG_BF;
+                            child = new BranchMap<K,V>(gen, newShift, leaf.splitL(newShift));
+                            lazySet(i, child);
+                        } else if (leaf.gen != gen) {
+                            // copy-on-write
+                            child = leaf.cloneForWriteL(gen);
+                            lazySet(i, child);
+                        } else {
+                            // no retry needed
+                            return leaf.putL(key, hash, value);
+                        }
+                    }
+                    // During the retry, the only thing that can go wrong is the
+                    // need for a split (if we did a copy-on-write during this
+                    // failure).  If that happens, nothing else can go wrong.
+                } else {
+                    return ((BranchMap<K,V>) child).get(key, hash);
+                }
+            }
+        }
+
+//        V remove(final K key, final int hash) {
+//        }
+//
+//        //////// CAS-like
+//
+//        V putIfAbsent(final K key, final int hash, final V value) {
+//        }
+//
+//        boolean replace(final K key, final int hash, final V oldValue, final V newValue) {
+//        }
+//
+//        V replace(final K key, final int hash, final V value) {
+//        }
+//
+//        boolean remove(final K key, final int hash, final V value) {
+//        }
     }
 }
