@@ -492,13 +492,15 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         boolean containsValueQ(final Object value) {
             for (int i = 0; i < BF; ++i) {
                 final Object child = get(i);
-                if (child instanceof LeafMap) {
-                    if (((LeafMap<K,V>) child).containsValueQ(value)) {
-                        return true;
-                    }
-                } else {
-                    if (((BranchMap<K,V>) child).containsValueQ(value)) {
-                        return true;
+                if (child != null) {
+                    if (child instanceof LeafMap) {
+                        if (((LeafMap<K,V>) child).containsValueQ(value)) {
+                            return true;
+                        }
+                    } else {
+                        if (((BranchMap<K,V>) child).containsValueQ(value)) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -658,7 +660,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    private volatile COWMgr<K,V> rootHolder = new COWMgr<K,V>();
+    private volatile COWMgr<K,V> rootHolder;
 
     private static int hash(int h) {
         // taken from ConcurrentHashMap
@@ -672,7 +674,38 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
     //////// construction and cloning
 
-    // TODO: implement clone()
+    public SnapHashMap() {
+        this.rootHolder = new COWMgr<K,V>();
+    }
+
+    public SnapHashMap(final Map<? extends K, ? extends V> source) {
+        this.rootHolder = new COWMgr<K,V>();
+        putAll(source);
+    }
+
+    public SnapHashMap(final SortedMap<K,? extends V> source) {
+        if (source instanceof SnapHashMap) {
+            final SnapHashMap<K,V> s = (SnapHashMap<K,V>) source;
+            this.rootHolder = (COWMgr<K,V>) s.rootHolder.clone();
+        }
+        else {
+            this.rootHolder = new COWMgr<K,V>();
+            putAll(source);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public SnapHashMap<K,V> clone() {
+        final SnapHashMap<K,V> copy;
+        try {
+            copy = (SnapHashMap<K,V>) super.clone();
+        } catch (final CloneNotSupportedException xx) {
+            throw new InternalError();
+        }
+        copy.rootHolder = (COWMgr<K,V>) rootHolder.clone();
+        return copy;
+    }
 
     //////// public interface
 
@@ -693,6 +726,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     public boolean containsValue(final Object value) {
+        if (value == null) {
+            throw new NullPointerException();
+        }
         return rootHolder.frozen().containsValueQ(value);
     }
 
@@ -701,13 +737,14 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     public V put(final K key, final V value) {
-        if (key == null || value == null) {
+        if (value == null) {
             throw new NullPointerException();
         }
+        final int h = hash(key.hashCode());
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         int sizeDelta = 0;
         try {
-            final V prev = rootHolder.mutable().put(key, hash(key.hashCode()), value);
+            final V prev = rootHolder.mutable().put(key, h, value);
             if (prev == null) {
                 sizeDelta = 1;
             }
@@ -718,13 +755,11 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     public V remove(final Object key) {
-        if (key == null) {
-            return null;
-        }
+        final int h = hash(key.hashCode());
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         int sizeDelta = 0;
         try {
-            final V prev = rootHolder.mutable().remove((K) key, hash(key.hashCode()));
+            final V prev = rootHolder.mutable().remove((K) key, h);
             if (prev != null) {
                 sizeDelta = -1;
             }
@@ -737,13 +772,14 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     //////// CAS-like
 
     public V putIfAbsent(final K key, final V value) {
-        if (key == null || value == null) {
+        if (value == null) {
             throw new NullPointerException();
         }
+        final int h = hash(key.hashCode());
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         int sizeDelta = 0;
         try {
-            final V prev = rootHolder.mutable().putIfAbsent(key, hash(key.hashCode()), value);
+            final V prev = rootHolder.mutable().putIfAbsent(key, h, value);
             if (prev == null) {
                 sizeDelta = 1;
             }
@@ -754,40 +790,40 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     public boolean replace(final K key, final V oldValue, final V newValue) {
-        if (key == null || oldValue == null || newValue == null) {
+        if (oldValue == null || newValue == null) {
             throw new NullPointerException();
         }
+        final int h = hash(key.hashCode());
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         try {
-            return rootHolder.mutable().replace(key, hash(key.hashCode()), oldValue, newValue);
+            return rootHolder.mutable().replace(key, h, oldValue, newValue);
         } finally {
             ticket.leave(0);
         }
     }
 
     public V replace(final K key, final V value) {
-        if (key == null || value == null) {
+        if (value == null) {
             throw new NullPointerException();
         }
+        final int h = hash(key.hashCode());
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         try {
-            return rootHolder.mutable().replace(key, hash(key.hashCode()), value);
+            return rootHolder.mutable().replace(key, h, value);
         } finally {
             ticket.leave(0);
         }
     }
 
     public boolean remove(final Object key, final Object value) {
-        if (key == null) {
-            throw new NullPointerException();
-        }
+        final int h = hash(key.hashCode());
         if (value == null) {
             return false;
         }
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         int sizeDelta = 0;
         try {
-            final boolean result = rootHolder.mutable().remove((K) key, hash(key.hashCode()), (V) value);
+            final boolean result = rootHolder.mutable().remove((K) key, h, (V) value);
             if (result) {
                 sizeDelta = -1;
             }
@@ -807,6 +843,20 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
     public Set<Entry<K,V>> entrySet() {
         return new EntrySet();
+    }
+
+    //////// Legacy methods
+
+    public boolean contains(final Object value) {
+        return containsValue(value);
+    }
+
+    public Enumeration<K> keys() {
+        return new KeyIterator(rootHolder.frozen());
+    }
+
+    public Enumeration<V> elements() {
+        return new ValueIterator(rootHolder.frozen());
     }
 
     //////// Map support classes
@@ -878,12 +928,13 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    static abstract class AbstractIter<K,V> {
+    abstract class AbstractIter {
 
         private final BranchMap<K,V> root;
         private int currentDepth;
         private LeafMap<K,V> currentLeaf;
         private HashEntry<K,V> currentEntry;
+        private HashEntry<K,V> prevEntry;
 
         AbstractIter(final BranchMap<K,V> frozenRoot) {
             this.root = frozenRoot;
@@ -964,21 +1015,29 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return currentEntry != null;
         }
 
+        public boolean hasMoreElements() {
+            return hasNext();
+        }
+
         HashEntry<K,V> nextEntry() {
             if (currentEntry == null) {
-                throw new IllegalStateException();
+                throw new NoSuchElementException();
             }
-            final HashEntry<K,V> result = currentEntry;
+            prevEntry = currentEntry;
             advance();
-            return result;
+            return prevEntry;
         }
 
         public void remove() {
-            throw new UnsupportedOperationException();
+            if (prevEntry == null) {
+                throw new IllegalStateException();
+            }
+            SnapHashMap.this.remove(prevEntry.key);
+            prevEntry = null;
         }
     }
 
-    final static class KeyIterator<K,V> extends AbstractIter<K,V> implements Iterator<K> {
+    final class KeyIterator extends AbstractIter implements Iterator<K>, Enumeration<K>  {
         KeyIterator(final BranchMap<K, V> frozenRoot) {
             super(frozenRoot);
         }
@@ -986,9 +1045,13 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         public K next() {
             return nextEntry().key;
         }
+
+        public K nextElement() {
+            return next();
+        }
     }
 
-    final static class ValueIterator<K,V> extends AbstractIter<K,V> implements Iterator<V> {
+    final class ValueIterator extends AbstractIter implements Iterator<V>, Enumeration<V> {
         ValueIterator(final BranchMap<K, V> frozenRoot) {
             super(frozenRoot);
         }
@@ -996,53 +1059,72 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         public V next() {
             return nextEntry().value;
         }
+
+        public V nextElement() {
+            return next();
+        }
     }
 
-    final static class EntryIterator<K,V> extends AbstractIter<K,V> implements Iterator<Map.Entry<K,V>> {
+    final class WriteThroughEntry extends AbstractMap.SimpleEntry<K,V> {
+        WriteThroughEntry(final K k, final V v) {
+            super(k, v);
+        }
+
+	public V setValue(final V value) {
+            if (value == null) {
+                throw new NullPointerException();
+            }
+            final V prev = super.setValue(value);
+            SnapHashMap.this.put(getKey(), value);
+            return prev;
+        }
+    }
+
+    final class EntryIterator extends AbstractIter implements Iterator<Map.Entry<K,V>> {
         EntryIterator(final BranchMap<K, V> frozenRoot) {
             super(frozenRoot);
         }
 
         public Map.Entry<K,V> next() {
             final HashEntry<K,V> e = nextEntry();
-            return new SimpleImmutableEntry<K,V>(e.key, e.value);
+            return new WriteThroughEntry(e.key, e.value);
         }
     }
     
 
-    public static void main(final String[] args) {
-        for (int i = 0; i < 10; ++i) {
-            runOne(new SnapHashMap<Integer,String>());
-            runOne(new java.util.concurrent.ConcurrentHashMap<Integer,String>());
-            runOne(new SnapTreeMap<Integer,String>());
-            runOne(new java.util.concurrent.ConcurrentSkipListMap<Integer,String>());
-            System.out.println();
-        }
-    }
-
-    private static void runOne(final Map<Integer,String> m) {
-        final long t0 = System.currentTimeMillis();
-        for (int p = 0; p < 10; ++p) {
-            for (int i = 0; i < 100000; ++i) {
-                m.put(Integer.reverse(i), "data");
-            }
-        }
-        final long t1 = System.currentTimeMillis();
-        for (int p = 0; p < 10; ++p) {
-            for (int i = 0; i < 100000; ++i) {
-                m.get(Integer.reverse(i));
-            }
-        }
-        final long t2 = System.currentTimeMillis();
-        for (int p = 0; p < 10; ++p) {
-            for (int i = 0; i < 100000; ++i) {
-                m.get(Integer.reverse(-(i + 1)));
-            }
-        }
-        final long t3 = System.currentTimeMillis();
-        System.out.println(
-                (t1 - t0) + " nanos/put, " +
-                (t2 - t1) + " nanos/get hit, " +
-                (t3 - t2) + " nanos/get miss : " + m.getClass().getSimpleName());
-    }
+//    public static void main(final String[] args) {
+//        for (int i = 0; i < 10; ++i) {
+//            runOne(new SnapHashMap<Integer,String>());
+//            runOne(new java.util.concurrent.ConcurrentHashMap<Integer,String>());
+//            runOne(new SnapTreeMap<Integer,String>());
+//            runOne(new java.util.concurrent.ConcurrentSkipListMap<Integer,String>());
+//            System.out.println();
+//        }
+//    }
+//
+//    private static void runOne(final Map<Integer,String> m) {
+//        final long t0 = System.currentTimeMillis();
+//        for (int p = 0; p < 10; ++p) {
+//            for (int i = 0; i < 100000; ++i) {
+//                m.put(Integer.reverse(i), "data");
+//            }
+//        }
+//        final long t1 = System.currentTimeMillis();
+//        for (int p = 0; p < 10; ++p) {
+//            for (int i = 0; i < 100000; ++i) {
+//                m.get(Integer.reverse(i));
+//            }
+//        }
+//        final long t2 = System.currentTimeMillis();
+//        for (int p = 0; p < 10; ++p) {
+//            for (int i = 0; i < 100000; ++i) {
+//                m.get(Integer.reverse(-(i + 1)));
+//            }
+//        }
+//        final long t3 = System.currentTimeMillis();
+//        System.out.println(
+//                (t1 - t0) + " nanos/put, " +
+//                (t2 - t1) + " nanos/get hit, " +
+//                (t3 - t2) + " nanos/get miss : " + m.getClass().getSimpleName());
+//    }
 }

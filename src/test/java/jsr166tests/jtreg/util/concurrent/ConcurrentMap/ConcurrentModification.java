@@ -31,6 +31,7 @@ package jsr166tests.jtreg.util.concurrent.ConcurrentMap;
  * @summary Reasonable things should happen if mutating while iterating.
  */
 
+import edu.stanford.ppl.concurrent.SnapHashMap;
 import edu.stanford.ppl.concurrent.SnapTreeMap;
 
 import java.util.*;
@@ -96,6 +97,7 @@ public class ConcurrentModification {
 
     public static void main(String[] args) {
         test(new ConcurrentHashMap<Integer,Integer>());
+        test(new SnapHashMap<Integer,Integer>());
         test(new ConcurrentSkipListMap<Integer,Integer>());
         test(new SnapTreeMap<Integer,Integer>());
 

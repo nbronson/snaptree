@@ -33,6 +33,8 @@ package jsr166tests.jtreg.util.Hashtable;
  * @author Josh Bloch, Martin Buchholz
  */
 
+import edu.stanford.ppl.concurrent.SnapHashMap;
+
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -42,6 +44,7 @@ public class SelfRef {
         testMap(new HashMap<Object,Object>());
         testMap(new LinkedHashMap<Object,Object>());
         testMap(new ConcurrentHashMap<Object,Object>());
+        testMap(new SnapHashMap<Object,Object>());
     }
 
     private static void testMap(Map<Object,Object> m) {
