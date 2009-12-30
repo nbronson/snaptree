@@ -441,6 +441,19 @@ public class SnapHashMap<K,V> {
             this.shift = shift;
         }
 
+        private BranchMap(final Generation gen, final BranchMap src) {
+            super(BF);
+            this.gen = gen;
+            this.shift = src.shift;
+            for (int i = 0; i < BF; ++i) {
+                lazySet(i, src.get(i));
+            }
+        }
+
+        BranchMap<K,V> cloneForWrite(final Generation gen) {
+            return new BranchMap<K,V>(gen, this);
+        }
+
         boolean containsKey(final K key, final int hash) {
             final Object child = getChild(hash);
             if (child instanceof LeafMap) {
@@ -496,52 +509,131 @@ public class SnapHashMap<K,V> {
 
         V put(final K key, final int hash, final V value) {
             Object child = getChild(hash);
-            final int i = indexFor(hash);
-            while (true) {
-                if (child instanceof LeafMap) {
-                    final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
-                    synchronized (leaf) {
-                        if (leaf.hasSplitL()) {
-                            // leaf was split between our getChild and our lock, reread
-                            child = get(i);
-                        } else if (leaf.shouldSplitL()) {
-                            // no need to CAS, because everyone is using the lock
-                            final int newShift = shift + LOG_BF;
-                            child = new BranchMap<K,V>(gen, newShift, leaf.splitL(newShift));
-                            lazySet(i, child);
-                        } else if (leaf.gen != gen) {
-                            // copy-on-write
-                            child = leaf.cloneForWriteL(gen);
-                            lazySet(i, child);
-                        } else {
-                            // no retry needed
-                            return leaf.putL(key, hash, value);
-                        }
+            while (child instanceof LeafMap) {
+                final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                synchronized (leaf) {
+                    child = prepareForLeafMutationL(hash, leaf);
+                    if (child == null) {
+                        // no replacement was provided
+                        return leaf.putL(key, hash, value);
                     }
-                    // During the retry, the only thing that can go wrong is the
-                    // need for a split (if we did a copy-on-write during this
-                    // failure).  If that happens, nothing else can go wrong.
+                }
+            }
+            return unsharedBranch(hash, child).put(key, hash, value);
+        }
+
+        private Object prepareForLeafMutationL(final int hash, final LeafMap<K,V> leaf) {
+            if (leaf.hasSplitL()) {
+                // leaf was split between our getChild and our lock, reread
+                return get(indexFor(hash));
+            } else if (leaf.shouldSplitL()) {
+                // no need to CAS, because everyone is using the lock
+                final int newShift = shift + LOG_BF;
+                final Object repl = new BranchMap<K,V>(gen, newShift, leaf.splitL(newShift));
+                lazySet(indexFor(hash), repl);
+                return repl;
+            } else if (leaf.gen != gen) {
+                // copy-on-write
+                final Object repl = leaf.cloneForWriteL(gen);
+                lazySet(indexFor(hash), repl);
+                return repl;
+            } else {
+                // OKAY
+                return null;
+            }
+        }
+
+        private BranchMap<K,V> unsharedBranch(final int hash, final Object child) {
+            final BranchMap<K,V> branch = (BranchMap<K,V>) child;
+            if (branch.gen == gen) {
+                return branch;
+            } else {
+                final BranchMap<K,V> fresh = branch.cloneForWrite(gen);
+                final int i = indexFor(hash);
+                if (compareAndSet(i, child, fresh)) {
+                    return fresh;
                 } else {
-                    return ((BranchMap<K,V>) child).get(key, hash);
+                    // if we failed someone else succeeded
+                    return (BranchMap<K,V>) get(i);
                 }
             }
         }
 
-//        V remove(final K key, final int hash) {
-//        }
-//
-//        //////// CAS-like
-//
-//        V putIfAbsent(final K key, final int hash, final V value) {
-//        }
-//
-//        boolean replace(final K key, final int hash, final V oldValue, final V newValue) {
-//        }
-//
-//        V replace(final K key, final int hash, final V value) {
-//        }
-//
-//        boolean remove(final K key, final int hash, final V value) {
-//        }
+        V remove(final K key, final int hash) {
+            Object child = getChild(hash);
+            while (child instanceof LeafMap) {
+                final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                synchronized (leaf) {
+                    child = prepareForLeafMutationL(hash, leaf);
+                    if (child == null) {
+                        // no replacement was provided
+                        return leaf.removeL(key, hash);
+                    }
+                }
+            }
+            return unsharedBranch(hash, child).remove(key, hash);
+        }
+
+        //////// CAS-like
+
+        V putIfAbsent(final K key, final int hash, final V value) {
+            Object child = getChild(hash);
+            while (child instanceof LeafMap) {
+                final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                synchronized (leaf) {
+                    child = prepareForLeafMutationL(hash, leaf);
+                    if (child == null) {
+                        // no replacement was provided
+                        return leaf.putIfAbsentL(key, hash, value);
+                    }
+                }
+            }
+            return unsharedBranch(hash, child).putIfAbsent(key, hash, value);
+        }
+
+        boolean replace(final K key, final int hash, final V oldValue, final V newValue) {
+            Object child = getChild(hash);
+            while (child instanceof LeafMap) {
+                final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                synchronized (leaf) {
+                    child = prepareForLeafMutationL(hash, leaf);
+                    if (child == null) {
+                        // no replacement was provided
+                        return leaf.replaceL(key, hash, oldValue, newValue);
+                    }
+                }
+            }
+            return unsharedBranch(hash, child).replace(key, hash, oldValue, newValue);
+        }
+
+        V replace(final K key, final int hash, final V value) {
+            Object child = getChild(hash);
+            while (child instanceof LeafMap) {
+                final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                synchronized (leaf) {
+                    child = prepareForLeafMutationL(hash, leaf);
+                    if (child == null) {
+                        // no replacement was provided
+                        return leaf.replaceL(key, hash, value);
+                    }
+                }
+            }
+            return unsharedBranch(hash, child).replace(key, hash, value);
+        }
+
+        boolean remove(final K key, final int hash, final V value) {
+            Object child = getChild(hash);
+            while (child instanceof LeafMap) {
+                final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                synchronized (leaf) {
+                    child = prepareForLeafMutationL(hash, leaf);
+                    if (child == null) {
+                        // no replacement was provided
+                        return leaf.removeL(key, hash, value);
+                    }
+                }
+            }
+            return unsharedBranch(hash, child).remove(key, hash, value);
+        }
     }
 }
