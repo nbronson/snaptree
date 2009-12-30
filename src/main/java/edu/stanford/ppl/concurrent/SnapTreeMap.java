@@ -4,14 +4,16 @@
 
 package edu.stanford.ppl.concurrent;
 
+import java.io.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentNavigableMap;
 
-// TODO: serialization
 // TODO: optimized buildFromSorted
 // TODO: submap.clone()
 
-public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
+public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable, Serializable {
+    private static final long serialVersionUID = 9052695062720473599L;
+    
 
     /** If false, null values will trigger a NullPointerException.  When false,
      *  this map acts exactly like a ConcurrentSkipListMap, except for the
@@ -337,8 +339,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     //////////////// state
 
-    private Comparator<? super K> comparator;
-    private volatile COWMgr<K,V> holderRef;
+    private final Comparator<? super K> comparator;
+    private transient volatile COWMgr<K,V> holderRef;
 
     //////////////// public interface
 
@@ -365,9 +367,24 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             this.holderRef = (COWMgr<K,V>) s.holderRef.clone();
         }
         else {
-            this.holderRef = new COWMgr<K,V>();
-            // TODO: implement buildFromSorted
-            putAll(source);
+            // TODO: take advantage of the sort order
+            // for now we optimize only by bypassing the COWMgr
+            int size = 0;
+            final RootHolder<K,V> holder = new RootHolder<K,V>();
+            for (Map.Entry<K,? extends V> e : source.entrySet()) {
+                final K k = e.getKey();
+                final V v = e.getValue();
+                if (k == null) {
+                    throw new NullPointerException("source map contained a null key");
+                }
+                if (!AllowNullValues && v == null) {
+                    throw new NullPointerException("source map contained a null value");
+                }
+                updateUnderRoot(k, comparable(k), UpdateAlways, null, encodeNull(v), holder);
+                ++size;
+            }
+
+            this.holderRef = new COWMgr<K,V>(holder, size);
         }
     }
 
@@ -538,7 +555,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     public Map.Entry<K,V> firstEntry() {
-        return (SimpleImmutableEntry<K,V>) extremeOrThrow(false, Left);
+        return (SimpleImmutableEntry<K,V>) extreme(false, Left);
     }
 
     public K lastKey() {
@@ -546,7 +563,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     public Map.Entry<K,V> lastEntry() {
-        return (SimpleImmutableEntry<K,V>) extremeOrThrow(false, Right);
+        return (SimpleImmutableEntry<K,V>) extreme(false, Right);
     }
 
     private Object extremeOrThrow(final boolean returnKey, final char dir) {
@@ -1194,7 +1211,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         assert (nodeOVL != UnlinkedOVL);
 
         while (true) {
-            final Node<K,V> child = node.child(dir);
+            final Node<K,V> child = node.unsharedChild(dir);
 
             if (nodeOVL != node.shrinkOVL) {
                 return null;
@@ -2052,17 +2069,21 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                                               final boolean fromInclusive,
                                               final K toKey,
                                               final boolean toInclusive) {
-        return new SubMap(this, comparable(fromKey), fromInclusive, comparable(toKey), toInclusive, false);
+        final Comparable<? super K> fromCmp = comparable(fromKey);
+        if (fromCmp.compareTo(toKey) > 0) {
+            throw new IllegalArgumentException();
+        }
+        return new SubMap(this, fromKey, fromCmp, fromInclusive, toKey, comparable(toKey), toInclusive, false);
     }
 
     @Override
     public ConcurrentNavigableMap<K,V> headMap(final K toKey, final boolean inclusive) {
-        return new SubMap(this, null, false, comparable(toKey), inclusive, false);
+        return new SubMap(this, null, null, false, toKey, comparable(toKey), inclusive, false);
     }
 
     @Override
     public ConcurrentNavigableMap<K,V> tailMap(final K fromKey, final boolean inclusive) {
-        return new SubMap(this, comparable(fromKey), inclusive, null, false, false);
+        return new SubMap(this, fromKey, comparable(fromKey), inclusive, null, null, false, false);
     }
 
     @Override
@@ -2082,27 +2103,34 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     @Override
     public ConcurrentNavigableMap<K,V> descendingMap() {
-        return new SubMap(this, null, false, null, false, true);
+        return new SubMap(this, null, null, false, null, null, false, true);
     }
 
-    private static class SubMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable {
+    private static class SubMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable, Serializable {
+        private static final long serialVersionUID = -7388140285999372919L;
 
         private final SnapTreeMap<K,V> m;
-        private final Comparable<? super K> minCmp;
+        private final K minKey;
+        private transient Comparable<? super K> minCmp;
         private final boolean minIncl;
-        private final Comparable<? super K> maxCmp;
+        private final K maxKey;
+        private transient Comparable<? super K> maxCmp;
         private final boolean maxIncl;
         private final boolean descending;
 
         private SubMap(final SnapTreeMap<K, V> m,
+                       final K minKey,
                        final Comparable<? super K> minCmp,
                        final boolean minIncl,
+                       final K maxKey,
                        final Comparable<? super K> maxCmp,
                        final boolean maxIncl,
                        final boolean descending) {
             this.m = m;
+            this.minKey = minKey;
             this.minCmp = minCmp;
             this.minIncl = minIncl;
+            this.maxKey = maxKey;
             this.maxCmp = maxCmp;
             this.maxIncl = maxIncl;
             this.descending = descending;
@@ -2301,52 +2329,84 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         @Override
         public Entry<K,V> lowerEntry(final K key) {
-            return headMap(key, false).lastEntryOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(null, false, key, false);
+            return s == null ? null : s.lastEntryOrNull();
         }
 
         @Override
         public K lowerKey(final K key) {
-            return headMap(key, false).lastKeyOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(null, false, key, false);
+            return s == null ? null : s.lastKeyOrNull();
         }
 
         @Override
         public Entry<K,V> floorEntry(final K key) {
-            return headMap(key, true).lastEntryOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(null, false, key, true);
+            return s == null ? null : s.lastEntryOrNull();
         }
 
         @Override
         public K floorKey(final K key) {
-            return headMap(key, true).lastKeyOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(null, false, key, true);
+            return s == null ? null : s.lastKeyOrNull();
         }
 
         @Override
         public Entry<K,V> ceilingEntry(final K key) {
-            return tailMap(key, true).firstEntryOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(key, true, null, false);
+            return s == null ? null : s.firstEntryOrNull();
         }
 
         @Override
         public K ceilingKey(final K key) {
-            return tailMap(key, true).firstKeyOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(key, true, null, false);
+            return s == null ? null : s.firstKeyOrNull();
         }
 
         @Override
         public Entry<K,V> higherEntry(final K key) {
-            return tailMap(key, false).firstEntryOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(key, false, null, false);
+            return s == null ? null : s.firstEntryOrNull();
         }
 
         @Override
         public K higherKey(final K key) {
-            return tailMap(key, false).firstKeyOrNull();
+            if (key == null) {
+                throw new NullPointerException();
+            }
+            final SubMap<K,V> s = subMapOrNull(key, false, null, false);
+            return s == null ? null : s.firstKeyOrNull();
         }
 
         @Override
         public Entry<K,V> firstEntry() {
-            return (Entry<K,V>) m.boundedExtremeOrThrow(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
+            return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
         }
 
         @Override
         public Entry<K,V> lastEntry() {
-            return (Entry<K,V>) m.boundedExtremeOrThrow(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
+            return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
         }
 
         @Override
@@ -2404,7 +2464,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (fromKey == null || toKey == null) {
                 throw new NullPointerException();
             }
-            return subMapImpl(fromKey, fromInclusive, toKey, toInclusive);
+            return subMapOrThrow(fromKey, fromInclusive, toKey, toInclusive);
         }
 
         @Override
@@ -2412,7 +2472,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (toKey == null) {
                 throw new NullPointerException();
             }
-            return subMapImpl(null, false, toKey, inclusive);
+            return subMapOrThrow(null, false, toKey, inclusive);
         }
 
         @Override
@@ -2420,7 +2480,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (fromKey == null) {
                 throw new NullPointerException();
             }
-            return subMapImpl(fromKey, inclusive, null, false);
+            return subMapOrThrow(fromKey, inclusive, null, false);
         }
 
         @Override
@@ -2438,47 +2498,73 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return tailMap(fromKey, true);
         }
 
-        private SubMap<K,V> subMapImpl(final K fromKey,
-                                       final boolean fromIncl,
-                                       final K toKey,
-                                       final boolean toIncl) {
-            final K extraMinKey = !descending ? fromKey : toKey;
-            final boolean extraMinIncl = !descending ? fromIncl : toIncl;
-            final K extraMaxKey = !descending ? toKey : fromKey;
-            final boolean extraMaxIncl = !descending ? toIncl : fromIncl;
+        private SubMap<K,V> subMapOrThrow(final K fromKey,
+                                          final boolean fromIncl,
+                                          final K toKey,
+                                          final boolean toIncl) {
+            final SubMap<K,V> s = subMapOrNull(fromKey, fromIncl, toKey, toIncl);
+            if (s == null) {
+                throw new IllegalArgumentException();
+            }
+            return s;
+        }
 
-            Comparable<? super K> newMinCmp = minCmp;
-            boolean newMinIncl = minIncl;
-            if (extraMinKey != null) {
-                final int c = minCmp == null ? -1 : minCmp.compareTo(extraMinKey);
-                if (c < 0) {
-                    newMinCmp = m.comparable(extraMinKey);
-                    newMinIncl = extraMinIncl;
+        private SubMap<K,V> subMapOrNull(final K fromKey,
+                                         final boolean fromIncl,
+                                         final K toKey,
+                                         final boolean toIncl) {
+            if (fromKey != null && !inRange(fromKey)) {
+                return null;
+            }
+            if (toKey != null && !inRange(toKey)) {
+                return null;
+            }
+            final Comparable<? super K> fromCmp = fromKey == null ? null : m.comparable(fromKey);
+            final Comparable<? super K> toCmp = toKey == null ? null : m.comparable(toKey);
+
+            if (fromKey != null && toKey != null) {
+                final int c = fromCmp.compareTo(toKey);
+                if ((!descending ? c > 0 : c < 0)) {
+                    return null;
                 }
-                else if (c == 0 && !extraMinIncl) {
-                    newMinIncl = false;
+            }
+            
+            K minK = minKey;
+            Comparable<? super K> minC = minCmp;
+            boolean minI = minIncl;
+            K maxK = maxKey;
+            Comparable<? super K> maxC = maxCmp;
+            boolean maxI = maxIncl;
+            
+            if (fromKey != null) {
+                if (!descending) {
+                    minK = fromKey;
+                    minC = fromCmp;
+                    minI = fromIncl;
+                } else {
+                    maxK = fromKey;
+                    maxC = fromCmp;
+                    maxI = fromIncl;
+                }
+            }
+            if (toKey != null) {
+                if (!descending) {
+                    maxK = toKey;
+                    maxC = toCmp;
+                    maxI = toIncl;
+                } else {
+                    minK = toKey;
+                    minC = toCmp;
+                    minI = toIncl;
                 }
             }
 
-            Comparable<? super K> newMaxCmp = maxCmp;
-            boolean newMaxIncl = maxIncl;
-            if (extraMaxKey != null) {
-                final int c = maxCmp == null ? 1 : maxCmp.compareTo(extraMaxKey);
-                if (c > 0) {
-                    newMaxCmp = m.comparable(extraMaxKey);
-                    newMaxIncl = extraMaxIncl;
-                }
-                else if (c == 0 && !extraMaxIncl) {
-                    newMaxIncl = false;
-                }
-            }
-
-            return new SubMap(m, newMinCmp, newMinIncl, newMaxCmp, newMaxIncl, descending);
+            return new SubMap(m, minK, minC, minI, maxK, maxC, maxI, descending);
         }
 
         @Override
         public SubMap<K,V> descendingMap() {
-            return new SubMap(m, minCmp, minIncl, maxCmp, maxIncl, !descending);
+            return new SubMap(m, minKey, minCmp, minIncl, maxKey, maxCmp, maxIncl, !descending);
         }
 
         @Override
@@ -2499,5 +2585,57 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         public NavigableSet<K> descendingKeySet() {
             return descendingMap().navigableKeySet();
         }
+
+        //////// Serialization
+
+        private void readObject(final ObjectInputStream xi) throws IOException, ClassNotFoundException {
+            xi.defaultReadObject();
+
+            minCmp = minKey == null ? null : m.comparable(minKey);
+            maxCmp = maxKey == null ? null : m.comparable(maxKey);
+        }
+    }
+
+    //////// Serialization
+
+    /** Saves the state of the <code>SnapTreeMap</code> to a stream. */
+    private void writeObject(final ObjectOutputStream xo) throws IOException {
+        // this handles the comparator, and any subclass stuff
+        xo.defaultWriteObject();
+
+        // by cloning the COWMgr, we get a frozen tree plus the size
+        final COWMgr<K,V> h = (COWMgr<K,V>) holderRef.clone();
+
+        xo.writeInt(h.size());        
+        writeEntry(xo, h.frozen().right);
+    }
+
+    private void writeEntry(final ObjectOutputStream xo, final Node<K,V> node) throws IOException {
+        if (node != null) {
+            writeEntry(xo, node.left);
+            if (node.vOpt != null) {
+                xo.writeObject(node.key);
+                xo.writeObject(decodeNull(node.vOpt));
+            }
+            writeEntry(xo, node.right);
+        }
+    }
+
+    /** Reverses {@link #writeObject(ObjectOutputStream)}. */
+    private void readObject(final ObjectInputStream xi) throws IOException, ClassNotFoundException  {
+        xi.defaultReadObject();
+
+        final int size = xi.readInt();
+
+        // TODO: take advantage of the sort order
+        // for now we optimize only by bypassing the COWMgr
+        final RootHolder<K,V> holder = new RootHolder<K,V>();
+        for (int i = 0; i < size; ++i) {
+            final K k = (K) xi.readObject();
+            final V v = (V) xi.readObject();
+            updateUnderRoot(k, comparable(k), UpdateAlways, null, encodeNull(v), holder);
+        }
+
+        holderRef = new COWMgr<K,V>(holder, size);
     }
 }
