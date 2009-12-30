@@ -9,11 +9,19 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
 
 public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V> {
 
-    private static final int LOG_BF = 4;
+    private static final int LOG_BF = 5;
     private static final int BF = 1 << LOG_BF;
     private static final int BF_MASK = BF - 1;
     private static final int maxLoad(final int capacity) { return capacity - (capacity >> 2); /* 0.75 */ }
     private static final int minLoad(final int capacity) { return (capacity >> 2); /* 0.25 */ }
+
+    // we would prefer BF LeafMap of LEAF_MIN_CAPACITY to a grow of a leaf at LEAF_MAX_CAPACITY
+    private static final int LOG_LEAF_MIN_CAPACITY = 3;
+    private static final int LOG_LEAF_MAX_CAPACITY = LOG_LEAF_MIN_CAPACITY + LOG_BF - 1;
+    private static final int LEAF_MIN_CAPACITY = 1 << LOG_LEAF_MIN_CAPACITY;
+    private static final int LEAF_MAX_CAPACITY = 1 << LOG_LEAF_MAX_CAPACITY;
+
+    private static final int ROOT_SHIFT = LOG_LEAF_MAX_CAPACITY;
 
     static class Generation {
     }
@@ -46,10 +54,6 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
      *  cases.
      */
     static class LeafMap<K,V> {
-        // we would prefer BF LeafMap of MIN_CAPACITY to a grow of a leaf at MAX_CAPACITY
-        static final int MIN_CAPACITY = 8;
-        static final int MAX_CAPACITY = MIN_CAPACITY * BF / 2;
-
         /** Set to null when this LeafMap is split into pieces. */
         Generation gen;
         HashEntry<K,V>[] table;
@@ -67,7 +71,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         @SuppressWarnings("unchecked")
         LeafMap(final Generation gen) {
             this.gen = gen;
-            this.table = (HashEntry<K,V>[]) new HashEntry[MIN_CAPACITY];
+            this.table = (HashEntry<K,V>[]) new HashEntry[LEAF_MIN_CAPACITY];
             this.uniq = 0;
         }
 
@@ -142,7 +146,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         private void growIfNecessaryL() {
             assert(!hasSplitL());
             final int n = table.length;
-            if (n < MAX_CAPACITY && uniq > maxLoad(n)) {
+            if (n < LEAF_MAX_CAPACITY && uniq > maxLoad(n)) {
                 rehashL(n << 1);
             }
         }
@@ -150,7 +154,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         private void shrinkIfNecessaryL() {
             assert(!hasSplitL());
             final int n = table.length;
-            if (n > MIN_CAPACITY && uniq < minLoad(n)) {
+            if (n > LEAF_MIN_CAPACITY && uniq < minLoad(n)) {
                 rehashL(n >> 1);
             }
         }
@@ -378,7 +382,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         //////// Leaf splitting
 
         boolean shouldSplitL() {
-            return uniq > maxLoad(MAX_CAPACITY);
+            return uniq > maxLoad(LEAF_MAX_CAPACITY);
         }
 
         @SuppressWarnings("unchecked")
@@ -419,11 +423,11 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                 ++uniq;
             }
 
-            if (e.next == head) {
+            if (entry.next == head) {
                 // no new entry needed
-                table[i] = e;
+                table[i] = entry;
             } else {
-                table[i] = new HashEntry<K,V>(gen, e.key, e.hash, e.value, head);
+                table[i] = new HashEntry<K,V>(gen, entry.key, entry.hash, entry.value, head);
             }
         }
     }
@@ -642,7 +646,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
     static class COWMgr<K,V> extends CopyOnWriteManager<BranchMap<K,V>> {
         COWMgr() {
-            super(new BranchMap<K,V>(new Generation(), LOG_BF), 0);
+            super(new BranchMap<K,V>(new Generation(), ROOT_SHIFT), 0);
         }
 
         protected BranchMap<K, V> freezeAndClone(final BranchMap<K,V> value) {
@@ -671,6 +675,10 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     // TODO: implement clone()
 
     //////// public interface
+
+    public void clear() {
+        rootHolder = new COWMgr<K,V>();
+    }
 
     public boolean isEmpty() {
         return rootHolder.isEmpty();
@@ -873,16 +881,16 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     static abstract class AbstractIter<K,V> {
 
         private final BranchMap<K,V> root;
-        private Stack<Integer> branchIndices = new Stack<Integer>();
+        private int currentDepth;
         private LeafMap<K,V> currentLeaf;
         private HashEntry<K,V> currentEntry;
 
         AbstractIter(final BranchMap<K,V> frozenRoot) {
             this.root = frozenRoot;
-            pushMin(frozenRoot, 0);
+            pushMin(frozenRoot, 1, 0);
         }
 
-        private boolean pushMin(final BranchMap<K,V> branch, final int minIndex) {
+        private boolean pushMin(final BranchMap<K,V> branch, final int depth, final int minIndex) {
             for (int i = minIndex; i < BF; ++i) {
                 final Object child = branch.get(i);
                 if (child != null) {
@@ -890,7 +898,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                         final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                         if (leaf.uniq > 0) {
                             // success!
-                            branchIndices.push(i);
+                            currentDepth = depth;
                             currentLeaf = leaf;
                             for (HashEntry<K,V> e : leaf.table) {
                                 if (e != null) {
@@ -901,11 +909,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                             throw new Error("logic error");
                         }
                     } else {
-                        branchIndices.push(i);
-                        if (pushMin((BranchMap<K,V>) branch, 0)) {
+                        if (pushMin((BranchMap<K,V>) child, depth + 1, 0)) {
                             return true;
                         }
-                        branchIndices.pop();
                     }
                 }
             }
@@ -931,10 +937,11 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             }
 
             // now we are moving between LeafMap-s
-            while (!branchIndices.isEmpty()) {
-                i = branchIndices.pop() + 1;
-                final BranchMap<K,V> branch = findBranch();
-                if (pushMin(findBranch(), i)) {
+            while (currentDepth > 0) {
+                // for depth that was 1, we want the root branch's shift
+                --currentDepth;
+                final int curI = (currentEntry.hash >> (ROOT_SHIFT + currentDepth * LOG_BF)) & BF_MASK;
+                if (pushMin(findBranch(), currentDepth + 1, curI + 1)) {
                     return;
                 }
             }
@@ -944,8 +951,10 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
 
         private BranchMap<K,V> findBranch() {
+            final int h = currentEntry.hash;
             BranchMap<K,V> result = root;
-            for (Integer i : branchIndices) {
+            for (int d = 0; d < currentDepth; ++d) {
+                final int i = (h >> (ROOT_SHIFT + d * LOG_BF)) & BF_MASK;
                 result = (BranchMap<K,V>) result.get(i);
             }
             return result;
