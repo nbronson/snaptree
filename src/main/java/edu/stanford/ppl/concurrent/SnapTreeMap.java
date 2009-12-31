@@ -11,6 +11,51 @@ import java.util.concurrent.ConcurrentNavigableMap;
 // TODO: optimized buildFromSorted
 // TODO: submap.clone()
 
+/** A concurrent AVL tree with fast cloning, based on the algorithm of Bronson,
+ *  Casper, Chafi, and Olukotun, "A Practical Concurrent Binary Search Tree"
+ *  published in PPoPP'10.  To simplify the locking protocols rebalancing work
+ *  is performed in pieces, and some removed keys are be retained as routing
+ *  nodes in the tree.
+ *
+ *  <p>This data structure honors all of the contracts of {@link
+ *  java.util.concurrent.ConcurrentSkipListMap}, with the additional contract
+ *  that clone, size, toArray, and iteration are linearizable (atomic). 
+ *
+ *  <p>The tree uses optimistic concurrency control.  No locks are usually
+ *  required for get, containsKey, firstKey, firstEntry, lastKey, or lastEntry.
+ *  Reads are not lock free (or even obstruction free), but obstructing threads
+ *  perform no memory allocation, system calls, or loops, which seems to work
+ *  okay in practice.  All of the updates to the tree are performed in fixed-
+ *  size blocks, so restoration of the AVL balance criteria may occur after a
+ *  change to the tree has linearized (but before the mutating operation has
+ *  returned).  The tree is always properly balanced when quiescent.
+ *
+ *  <p>To clone the tree (or produce a snapshot for consistent iteration) the
+ *  root node is marked as shared, which must be (*) done while there are no
+ *  pending mutations.  New mutating operations are blocked if a mark is
+ *  pending, and when existing mutating operations are completed the mark is
+ *  made.
+ *  <em>* - It would be less disruptive if we immediately marked the root as
+ *  shared, and then waited for pending operations that might not have seen the
+ *  mark without blocking new mutations.  This could result in imbalance being
+ *  frozen into the shared portion of the tree, though.  To minimize the
+ *  problem we perform the mark and reenable mutation on whichever thread
+ *  notices that the entry count has become zero, to reduce context switches on
+ *  the critical path.</em>
+ *
+ *  <p>The same multi-cache line data structure required for efficiently
+ *  tracking the entry and exit for mutating operations is used to maintain the
+ *  current size of the tree.  This means that the size can be computed by
+ *  quiescing as for a clone, but without doing any marking.
+ *
+ *  <p>Range queries such as higherKey are not amenable to the optimistic
+ *  hand-over-hand locking scheme used for exact searches, so they are
+ *  implemented with pessimistic concurrency control.  Mutation can be
+ *  considered to acquire a lock on the map in Intention-eXclusive mode, range
+ *  queries, size(), and root marking acquire the lock in Shared mode.
+ *
+ *  @author Nathan Bronson
+ */
 public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable, Serializable {
     private static final long serialVersionUID = 9052695062720473599L;
     
@@ -24,7 +69,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     static final boolean AllowNullValues = false;
 
     /** This is a special value that indicates the presence of a null value,
-     *  to differentiate from the absence of a value.
+     *  to differentiate from the absence of a value.  Only used when
+     *  {@link #AllowNullValues} is true.
      */
     static final Object SpecialNull = new Object();
 
@@ -116,7 +162,6 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         Node<K,V> child(char dir) { return dir == Left ? left : right; }
-        Node<K,V> childSibling(char dir) { return dir == Left ? right : left; }
 
         void setChild(char dir, Node<K,V> node) {
             if (dir == Left) {
@@ -302,11 +347,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         protected RootHolder<K,V> freezeAndClone(final RootHolder<K,V> value) {
             Node.markShared(value.right);
-            return new RootHolder(value); 
+            return new RootHolder<K,V>(value);
         }
 
-        protected RootHolder<K, V> cloneFrozen(final RootHolder<K, V> frozenValue) {
-            return new RootHolder(frozenValue);
+        protected RootHolder<K,V> cloneFrozen(final RootHolder<K,V> frozenValue) {
+            return new RootHolder<K,V>(frozenValue);
         }
     }
 
@@ -959,7 +1004,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     private boolean attemptInsertIntoEmpty(final K key,
                                            final Object vOpt,
-                                           final RootHolder<K, V> holder) {
+                                           final RootHolder<K,V> holder) {
         synchronized (holder) {
             if (holder.right == null) {
                 holder.right = new Node<K,V>(key, 1, vOpt, holder, 0L, null, null);
@@ -1429,8 +1474,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> rebalanceToRight_nl(final Node<K,V> nParent,
-                                          final Node<K, V> n,
-                                          final Node<K, V> nL,
+                                          final Node<K,V> n,
+                                          final Node<K,V> nL,
                                           final int hR0) {
         // L is too large, we will rotate-right.  If L.R is taller
         // than L.L, then we will first rotate-left L.
@@ -1439,7 +1484,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (hL - hR0 <= 1) {
                 return n; // retry
             } else {
-                final Node<K, V> nLR = nL.unsharedRight();
+                final Node<K,V> nLR = nL.unsharedRight();
                 final int hLL0 = height(nL.left);
                 final int hLR0 = height(nLR);
                 if (hLL0 >= hLR0) {
@@ -1478,8 +1523,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> rebalanceToLeft_nl(final Node<K,V> nParent,
-                                         final Node<K, V> n,
-                                         final Node<K, V> nR,
+                                         final Node<K,V> n,
+                                         final Node<K,V> nR,
                                          final int hL0) {
         synchronized (nR) {
             final int hR = nR.height;
@@ -1511,8 +1556,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> rotateRight_nl(final Node<K,V> nParent,
-                                     final Node<K, V> n,
-                                     final Node<K, V> nL,
+                                     final Node<K,V> n,
+                                     final Node<K,V> nL,
                                      final int hR,
                                      final int hLL,
                                      final Node<K,V> nLR,
@@ -1569,10 +1614,10 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> rotateLeft_nl(final Node<K,V> nParent,
-                                    final Node<K, V> n,
+                                    final Node<K,V> n,
                                     final int hL,
-                                    final Node<K, V> nR,
-                                    final Node<K, V> nRL,
+                                    final Node<K,V> nR,
+                                    final Node<K,V> nRL,
                                     final int hRL,
                                     final int hRR) {
         final long nodeOVL = n.shrinkOVL;
@@ -1618,8 +1663,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> rotateRightOverLeft_nl(final Node<K,V> nParent,
-                                             final Node<K, V> n,
-                                             final Node<K, V> nL,
+                                             final Node<K,V> n,
+                                             final Node<K,V> nL,
                                              final int hR,
                                              final int hLL,
                                              final Node<K,V> nLR,
@@ -1696,9 +1741,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
     }
 
     private Node<K,V> rotateLeftOverRight_nl(final Node<K,V> nParent,
-                                             final Node<K, V> n,
+                                             final Node<K,V> n,
                                              final int hL,
-                                             final Node<K, V> nR,
+                                             final Node<K,V> nR,
                                              final Node<K,V> nRL,
                                              final int hRR,
                                              final int hRLR) {
@@ -2157,7 +2202,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         private final boolean maxIncl;
         private final boolean descending;
 
-        private SubMap(final SnapTreeMap<K, V> m,
+        private SubMap(final SnapTreeMap<K,V> m,
                        final K minKey,
                        final Comparable<? super K> minCmp,
                        final boolean minIncl,
@@ -2475,7 +2520,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         @Override
         public Entry<K,V> pollFirstEntry() {
             while (true) {
-                final Entry<K,V> snapshot = (Entry<K, V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
+                final Entry<K,V> snapshot = (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
                 if (snapshot == null || m.remove(snapshot.getKey(), snapshot.getValue())) {
                     return snapshot;
                 }
@@ -2483,9 +2528,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
 
         @Override
-        public Entry<K, V> pollLastEntry() {
+        public Entry<K,V> pollLastEntry() {
             while (true) {
-                final Entry<K,V> snapshot = (Entry<K, V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
+                final Entry<K,V> snapshot = (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
                 if (snapshot == null || m.remove(snapshot.getKey(), snapshot.getValue())) {
                     return snapshot;
                 }
