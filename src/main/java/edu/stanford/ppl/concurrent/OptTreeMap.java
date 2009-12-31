@@ -7,6 +7,20 @@ package edu.stanford.ppl.concurrent;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 
+/** A concurrent relaxed balance AVL tree, based on the algorithm of Bronson,
+ *  Casper, Chafi, and Olukotun, "A Practical Concurrent Binary Search Tree"
+ *  published in PPoPP'10.  To simplify the locking protocols rebalancing work
+ *  is performed in pieces, and some removed keys are be retained as routing
+ *  nodes in the tree.
+ *
+ *  <p>Compared to {@link SnapTreeMap}, this implementation does not provide
+ *  any structural sharing with copy on write.  As a result, it must support
+ *  iteration on the mutating structure, so nodes track both the number of
+ *  shrinks (which invalidate queries and traverals) and grows (which
+ *  invalidate traversals).
+ *
+ *  @author Nathan Bronson
+ */
 public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V> {
 
     /** This is a special value that indicates the presence of a null value,
@@ -477,7 +491,7 @@ public class OptTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K
             case UpdateAlways: return true;
             case UpdateIfAbsent: return prev == null;
             case UpdateIfPresent: return prev != null;
-            default: return prev == expected;
+            default: return prev == expected; // TODO: use .equals
         }
     }
 
