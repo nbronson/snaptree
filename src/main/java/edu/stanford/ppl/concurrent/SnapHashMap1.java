@@ -1154,39 +1154,39 @@ public class SnapHashMap1<K,V> extends AbstractMap<K,V> implements ConcurrentMap
         rootHolder = new COWMgr<K,V>(root, size);
     }
 
-//    public static void main(final String[] args) {
-//        for (int i = 0; i < 10; ++i) {
-//            runOne(new SnapHashMap<Integer,String>());
+    public static void main(final String[] args) {
+        for (int i = 0; i < 10; ++i) {
+            runOne(new SnapHashMap1<Integer,String>());
 //            runOne(new java.util.concurrent.ConcurrentHashMap<Integer,String>());
 //            runOne(new SnapTreeMap<Integer,String>());
 //            runOne(new java.util.concurrent.ConcurrentSkipListMap<Integer,String>());
 //            System.out.println();
-//        }
-//    }
-//
-//    private static void runOne(final Map<Integer,String> m) {
-//        final long t0 = System.currentTimeMillis();
-//        for (int p = 0; p < 10; ++p) {
-//            for (int i = 0; i < 100000; ++i) {
-//                m.put(Integer.reverse(i), "data");
-//            }
-//        }
-//        final long t1 = System.currentTimeMillis();
-//        for (int p = 0; p < 10; ++p) {
-//            for (int i = 0; i < 100000; ++i) {
-//                m.get(Integer.reverse(i));
-//            }
-//        }
-//        final long t2 = System.currentTimeMillis();
-//        for (int p = 0; p < 10; ++p) {
-//            for (int i = 0; i < 100000; ++i) {
-//                m.get(Integer.reverse(-(i + 1)));
-//            }
-//        }
-//        final long t3 = System.currentTimeMillis();
-//        System.out.println(
-//                (t1 - t0) + " nanos/put, " +
-//                (t2 - t1) + " nanos/get hit, " +
-//                (t3 - t2) + " nanos/get miss : " + m.getClass().getSimpleName());
-//    }
+        }
+    }
+
+    private static void runOne(final Map<Integer,String> m) {
+        final long t0 = System.currentTimeMillis();
+        for (int p = 0; p < 10; ++p) {
+            for (int i = 0; i < 100000; ++i) {
+                m.put(Integer.reverse(i), "data");
+            }
+        }
+        final long t1 = System.currentTimeMillis();
+        for (int p = 0; p < 10; ++p) {
+            for (int i = 0; i < 100000; ++i) {
+                m.get(Integer.reverse(i));
+            }
+        }
+        final long t2 = System.currentTimeMillis();
+        for (int p = 0; p < 10; ++p) {
+            for (int i = 0; i < 100000; ++i) {
+                m.get(Integer.reverse(-(i + 1)));
+            }
+        }
+        final long t3 = System.currentTimeMillis();
+        System.out.println(
+                (t1 - t0) + " nanos/put, " +
+                (t2 - t1) + " nanos/get hit, " +
+                (t3 - t2) + " nanos/get miss : " + m.getClass().getSimpleName());
+    }
 }
