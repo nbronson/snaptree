@@ -1,4 +1,4 @@
-/* CCSTM - (c) 2009 Stanford University - PPL */
+/* SnapTree - (c) 2009 Stanford University - PPL */
 
 // EpochTest
 package edu.stanford.ppl.concurrent;

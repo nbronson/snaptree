@@ -1,4 +1,4 @@
-/* CCSTM - (c) 2009 Stanford University - PPL */
+/* SnapTree - (c) 2009 Stanford University - PPL */
 
 // AllSnapTreeMap
 package jsr166tests;
