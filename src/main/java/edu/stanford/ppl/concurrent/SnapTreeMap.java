@@ -304,6 +304,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         //////// Map.Entry stuff
 
+        @Override
         public boolean equals(final Object o) {
             if (!(o instanceof Map.Entry)) {
                 return false;
@@ -316,11 +317,13 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return o1 == null ? o2 == null : o1.equals(o2);
         }
 
+        @Override
         public int hashCode() {
             return (key   == null ? 0 : key.hashCode()) ^
                    (getValue() == null ? 0 : getValue().hashCode());
         }
 
+        @Override
         public String toString() {
             return key + "=" + getValue();
         }
@@ -464,6 +467,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         holderRef = new COWMgr<K,V>();
     }
 
+    @Override
     public Comparator<? super K> comparator() {
         return comparator;
     }
@@ -595,15 +599,18 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         }
     }
 
+    @Override
     public K firstKey() {
         return extremeKeyOrThrow(Left);
     }
 
+    @Override
     @SuppressWarnings("unchecked")
     public Map.Entry<K,V> firstEntry() {
         return (SimpleImmutableEntry<K,V>) extreme(false, Left);
     }
 
+    @Override
     public K lastKey() {
         return extremeKeyOrThrow(Right);
     }
@@ -699,42 +706,50 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     //////////////// quiesced search
 
+    @Override
     @SuppressWarnings("unchecked")
     public K lowerKey(final K key) {
         return (K) boundedExtreme(null, false, comparable(key), false, true, Right);
     }
 
+    @Override
     @SuppressWarnings("unchecked")
     public K floorKey(final K key) {
         return (K) boundedExtreme(null, false, comparable(key), true, true, Right);
     }
 
+    @Override
     @SuppressWarnings("unchecked")
     public K ceilingKey(final K key) {
         return (K) boundedExtreme(comparable(key), true, null, false, true, Left);
     }
 
+    @Override
     @SuppressWarnings("unchecked")
     public K higherKey(final K key) {
         return (K) boundedExtreme(comparable(key), false, null, false, true, Left); 
     }
 
 
+    @Override
     @SuppressWarnings("unchecked")
     public Entry<K,V> lowerEntry(final K key) {
         return (Entry<K,V>) boundedExtreme(null, false, comparable(key), false, false, Right);
     }
 
+    @Override
     @SuppressWarnings("unchecked")
     public Entry<K,V> floorEntry(final K key) {
         return (Entry<K,V>) boundedExtreme(null, false, comparable(key), true, false, Right);
     }
 
+    @Override
     @SuppressWarnings("unchecked")
     public Entry<K,V> ceilingEntry(final K key) {
         return (Entry<K,V>) boundedExtreme(comparable(key), true, null, false, false, Left);
     }
 
+    @Override
     @SuppressWarnings("unchecked")
     public Entry<K,V> higherEntry(final K key) {
         return (Entry<K,V>) boundedExtreme(comparable(key), false, null, false, false, Left);
@@ -1261,10 +1276,12 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     //////////////// NavigableMap stuff
 
+    @Override
     public Map.Entry<K,V> pollFirstEntry() {
         return pollExtremeEntry(Left);
     }
 
+    @Override
     public Map.Entry<K,V> pollLastEntry() {
         return pollExtremeEntry(Right);
     }
@@ -1903,6 +1920,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             super(m, minCmp, minIncl, maxCmp, maxIncl, descending);
         }
 
+        @Override
         public Entry<K,V> next() {
             return nextNode();
         }
@@ -1922,6 +1940,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             super(m, minCmp, minIncl, maxCmp, maxIncl, descending);
         }
 
+        @Override
         public K next() {
             return nextNode().key;
         }
@@ -2116,50 +2135,69 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         //////// basic Set stuff
 
+        @Override
         abstract public Iterator<K> iterator();
 
         @Override
         public boolean contains(final Object o) { return map.containsKey(o); }
         @Override
         public boolean isEmpty() { return map.isEmpty(); }
+        @Override
         public int size() { return map.size(); }
         @Override
         public boolean remove(final Object o) { return map.remove(o) != null; }
 
         //////// SortedSet stuff
 
+        @Override
         public Comparator<? super K> comparator() { return map.comparator(); }
+        @Override
         public K first() { return map.firstKey(); }
+        @Override
         public K last() { return map.lastKey(); }
 
         //////// NavigableSet stuff
 
+        @Override
         public K lower(final K k) { return map.lowerKey(k); }
+        @Override
         public K floor(final K k) { return map.floorKey(k); }
+        @Override
         public K ceiling(final K k) { return map.ceilingKey(k); }
+        @Override
         public K higher(final K k) { return map.higherKey(k); }
 
+        @Override
         public K pollFirst() { return map.pollFirstEntry().getKey(); }
+        @Override
         public K pollLast() { return map.pollLastEntry().getKey(); }
 
+        @Override
         public NavigableSet<K> descendingSet() { return map.descendingKeySet(); }
+        @Override
         public Iterator<K> descendingIterator() { return map.descendingKeySet().iterator(); }
 
+        @Override
         public NavigableSet<K> subSet(final K fromElement, final boolean minInclusive, final K toElement, final boolean maxInclusive) {
             return map.subMap(fromElement, minInclusive, toElement, maxInclusive).keySet();
         }
+        @Override
         public NavigableSet<K> headSet(final K toElement, final boolean inclusive) {
             return map.headMap(toElement, inclusive).keySet();
         }
+        @Override
         public NavigableSet<K> tailSet(final K fromElement, final boolean inclusive) {
             return map.tailMap(fromElement, inclusive).keySet();
         }
+        @Override
         public SortedSet<K> subSet(final K fromElement, final K toElement) {
             return map.subMap(fromElement, toElement).keySet();
         }
+        @Override
         public SortedSet<K> headSet(final K toElement) {
             return map.headMap(toElement).keySet();
         }
+        @Override
         public SortedSet<K> tailSet(final K fromElement) {
             return map.tailMap(fromElement).keySet();
         }
@@ -2209,7 +2247,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         return new SubMap(this, null, null, false, null, null, false, true);
     }
 
-    private static class SubMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Cloneable, Serializable {
+    private static class SubMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavigableMap<K,V>, Serializable {
         private static final long serialVersionUID = -7388140285999372919L;
 
         private final SnapTreeMap<K,V> m;
@@ -2293,8 +2331,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return Node.computeFrozenSize(root, minCmp, minIncl, maxCmp, maxIncl);
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public boolean containsKey(final Object key) {
             if (key == null) {
                 throw new NullPointerException();
@@ -2311,8 +2349,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return super.containsValue(value);
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public V get(final Object key) {
             if (key == null) {
                 throw new NullPointerException();
@@ -2327,8 +2365,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return m.put(key, value);
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public V remove(final Object key) {
             if (key == null) {
                 throw new NullPointerException();
@@ -2534,20 +2572,20 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                     ? this : subMapInRange(key, false, null, false)).firstKeyOrNull();
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public Entry<K,V> firstEntry() {
             return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public Entry<K,V> lastEntry() {
             return (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public Entry<K,V> pollFirstEntry() {
             while (true) {
                 final Entry<K,V> snapshot = (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, minDir());
@@ -2557,8 +2595,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             }
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public Entry<K,V> pollLastEntry() {
             while (true) {
                 final Entry<K,V> snapshot = (Entry<K,V>) m.boundedExtreme(minCmp, minIncl, maxCmp, maxIncl, false, maxDir());
@@ -2576,8 +2614,8 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return m.putIfAbsent(key, value);
         }
 
-        @SuppressWarnings("unchecked")
         @Override
+        @SuppressWarnings("unchecked")
         public boolean remove(final Object key, final Object value) {
             return inRange((K) key) && m.remove(key, value);
         }
