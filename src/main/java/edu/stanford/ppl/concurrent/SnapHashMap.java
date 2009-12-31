@@ -3,11 +3,16 @@
 // LeafMap
 package edu.stanford.ppl.concurrent;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
-public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V> {
+public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V>, Cloneable, Serializable {
+    private static final long serialVersionUID = 9212449426984968891L;
 
     private static final int LOG_BF = 5;
     private static final int BF = 1 << LOG_BF;
@@ -651,6 +656,10 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             super(new BranchMap<K,V>(new Generation(), ROOT_SHIFT), 0);
         }
 
+        COWMgr(final BranchMap<K,V> initialValue, final int initialSize) {
+            super(initialValue, initialSize);
+        }
+
         protected BranchMap<K, V> freezeAndClone(final BranchMap<K,V> value) {
             return value.cloneForWrite(new Generation());
         }
@@ -660,7 +669,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    private volatile COWMgr<K,V> rootHolder;
+    private transient volatile COWMgr<K,V> rootHolder;
 
     private static int hash(int h) {
         // taken from ConcurrentHashMap
@@ -1091,6 +1100,56 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
     
+    //////// Serialization
+
+    /** Saves the state of the <code>SnapTreeMap</code> to a stream. */
+    private void writeObject(final ObjectOutputStream xo) throws IOException {
+        // this handles the comparator, and any subclass stuff
+        xo.defaultWriteObject();
+
+        // by cloning the COWMgr, we get a frozen tree plus the size
+        final COWMgr<K,V> h = (COWMgr<K,V>) rootHolder.clone();
+
+        xo.writeInt(h.size());
+        writeEntry(xo, h.frozen());
+    }
+
+    private void writeEntry(final ObjectOutputStream xo, final BranchMap<K,V> branch) throws IOException {
+        for (int i = 0; i < BF; ++i) {
+            final Object child = branch.get(i);
+            if (child != null) {
+                if (child instanceof BranchMap) {
+                    writeEntry(xo, (BranchMap<K,V>) child);
+                } else {
+                    final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
+                    for (HashEntry<K,V> head : leaf.table) {
+                        HashEntry<K,V> e = head;
+                        while (e != null) {
+                            xo.writeObject(e.key);
+                            xo.writeObject(e.value);
+                            e = e.next;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Reverses {@link #writeObject(ObjectOutputStream)}. */
+    private void readObject(final ObjectInputStream xi) throws IOException, ClassNotFoundException  {
+        xi.defaultReadObject();
+
+        final int size = xi.readInt();
+
+        final BranchMap<K,V> root = new BranchMap<K,V>(new Generation(), ROOT_SHIFT);
+        for (int i = 0; i < size; ++i) {
+            final K k = (K) xi.readObject();
+            final V v = (V) xi.readObject();
+            root.put(k, hash(k.hashCode()), v);
+        }
+
+        rootHolder = new COWMgr<K,V>(root, size);
+    }
 
 //    public static void main(final String[] args) {
 //        for (int i = 0; i < 10; ++i) {
