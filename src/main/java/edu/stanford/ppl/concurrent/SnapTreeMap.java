@@ -827,7 +827,42 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             case UpdateAlways: return true;
             case UpdateIfAbsent: return prev == null;
             case UpdateIfPresent: return prev != null;
-            default: return prev == expected;
+            default: { // UpdateIfEq
+                assert(expected != null);
+                if (prev == null) {
+                    return false;
+                }
+                if (AllowNullValues && (prev == SpecialNull || expected == SpecialNull)) {
+                    return prev == SpecialNull && expected == SpecialNull;
+                }
+                return prev.equals(expected);
+            }
+        }
+    }
+
+    private static Object noUpdateResult(final int func, final Object prev) {
+        return func == UpdateIfEq ? Boolean.FALSE : prev;
+    }
+
+    private static Object updateResult(final int func, final Object prev) {
+        return func == UpdateIfEq ? Boolean.TRUE : prev;
+    }
+
+    private static int sizeDelta(final int func, final Object result, final Object newValue) {
+        switch (func) {
+            case UpdateAlways: {
+                return (result != null ? -1 : 0) + (newValue != null ? 1 : 0);
+            }
+            case UpdateIfAbsent: {
+                assert(newValue != null);
+                return result != null ? 0 : 1;
+            }
+            case UpdateIfPresent: {
+                return result == null ? 0 : (newValue != null ? 0 : -1);
+            }
+            default: { // UpdateIfEq
+                return !((Boolean) result) ? 0 : (newValue != null ? 0 : -1);
+            }
         }
     }
 
@@ -848,7 +883,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     @Override
     public boolean replace(final K key, final V oldValue, final V newValue) {
-        return update(key, UpdateIfEq, encodeNull(oldValue), encodeNull(newValue)) == encodeNull(oldValue);
+        return (Boolean) update(key, UpdateIfEq, encodeNull(oldValue), encodeNull(newValue));
     }
 
     @Override
@@ -858,10 +893,13 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
     @Override
     public boolean remove(final Object key, final Object value) {
+        if (key == null) {
+            throw new NullPointerException();
+        }
         if (!AllowNullValues && value == null) {
             return false;
         }
-        return update(key, UpdateIfEq, encodeNull(value), null) == encodeNull(value);
+        return (Boolean) update(key, UpdateIfEq, encodeNull(value), null);
     }
 
     // manages the epoch
@@ -870,16 +908,14 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                           final Object expected,
                           final Object newValue) {
         final Comparable<? super K> k = comparable(key);
-        int sizeDelta = 0;
+        int sd = 0;
         final Epoch.Ticket ticket = holderRef.beginMutation();
         try {
-            final Object prev = updateUnderRoot(key, k, func, expected, newValue, holderRef.mutable());
-            if (shouldUpdate(func, prev, expected)) {
-                sizeDelta = (prev != null ? -1 : 0) + (newValue != null ? 1 : 0);
-            }
-            return prev;
+            final Object result = updateUnderRoot(key, k, func, expected, newValue, holderRef.mutable());
+            sd = sizeDelta(func, result, newValue);
+            return result;
         } finally {
-            ticket.leave(sizeDelta);
+            ticket.leave(sd);
         }
     }
 
@@ -896,11 +932,12 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             final Node<K,V> right = holder.unsharedRight();
             if (right == null) {
                 // key is not present
-                if (!shouldUpdate(func, null, expected) ||
-                        newValue == null ||
-                        attemptInsertIntoEmpty((K)key, newValue, holder)) {
+                if (!shouldUpdate(func, null, expected)) {
+                    return noUpdateResult(func, null);
+                }
+                if (newValue == null || attemptInsertIntoEmpty((K)key, newValue, holder)) {
                     // nothing needs to be done, or we were successful, prev value is Absent
-                    return null;
+                    return updateResult(func, null);
                 }
                 // else RETRY
             } else {
@@ -1002,7 +1039,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                             // We're valid.  Does the user still want to
                             // perform the operation?
                             if (!shouldUpdate(func, null, expected)) {
-                                return null;
+                                return noUpdateResult(func, null);
                             }
 
                             // Create a new leaf
@@ -1016,7 +1053,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                     }
                     if (success) {
                         fixHeightAndRebalance(damaged);
-                        return null;
+                        return updateResult(func, null);
                     }
                     // else RETRY
                 }
@@ -1080,9 +1117,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
                 synchronized (node) {
                     prev = node.vOpt;
-                    if (prev == null || !shouldUpdate(func, prev, expected)) {
-                        // nothing to do
-                        return prev;
+                    if (!shouldUpdate(func, prev, expected)) {
+                        return noUpdateResult(func, prev);
+                    }
+                    if (prev == null) {
+                        return updateResult(func, prev);
                     }
                     if (!attemptUnlink_nl(parent, node)) {
                         return SpecialRetry;
@@ -1092,7 +1131,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                 damaged = fixHeight_nl(parent);
             }
             fixHeightAndRebalance(damaged);
-            return prev;
+            return updateResult(func, prev);
         } else {
             // potential update (including remove-without-unlink)
             synchronized (node) {
@@ -1103,7 +1142,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
                 final Object prev = node.vOpt;
                 if (!shouldUpdate(func, prev, expected)) {
-                    return prev;
+                    return noUpdateResult(func, prev);
                 }
 
                 // retry if we now detect that unlink is possible
@@ -1113,7 +1152,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
                 // update in-place
                 node.vOpt = newValue;
-                return prev;
+                return updateResult(func, prev);
             }
         }
     }
@@ -2332,8 +2371,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(null, false, key, false);
-            return s == null ? null : s.lastEntryOrNull();
+            if (!descending ? tooLow(key) : tooHigh(key)) {
+                return null;
+            }
+            return ((!descending ? tooHigh(key) : tooLow(key))
+                    ? this : subMapInRange(null, false, key, false)).lastEntryOrNull();
         }
 
         @Override
@@ -2341,8 +2383,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(null, false, key, false);
-            return s == null ? null : s.lastKeyOrNull();
+            if (!descending ? tooLow(key) : tooHigh(key)) {
+                return null;
+            }
+            return ((!descending ? tooHigh(key) : tooLow(key))
+                    ? this : subMapInRange(null, false, key, false)).lastKeyOrNull();
         }
 
         @Override
@@ -2350,8 +2395,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(null, false, key, true);
-            return s == null ? null : s.lastEntryOrNull();
+            if (!descending ? tooLow(key) : tooHigh(key)) {
+                return null;
+            }
+            return ((!descending ? tooHigh(key) : tooLow(key))
+                    ? this : subMapInRange(null, false, key, true)).lastEntryOrNull();
         }
 
         @Override
@@ -2359,8 +2407,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(null, false, key, true);
-            return s == null ? null : s.lastKeyOrNull();
+            if (!descending ? tooLow(key) : tooHigh(key)) {
+                return null;
+            }
+            return ((!descending ? tooHigh(key) : tooLow(key))
+                    ? this : subMapInRange(null, false, key, true)).lastKeyOrNull();
         }
 
         @Override
@@ -2368,8 +2419,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(key, true, null, false);
-            return s == null ? null : s.firstEntryOrNull();
+            if (!descending ? tooHigh(key) : tooLow(key)) {
+                return null;
+            }
+            return ((!descending ? tooLow(key) : tooHigh(key))
+                    ? this : subMapInRange(key, true, null, false)).firstEntryOrNull();
         }
 
         @Override
@@ -2377,8 +2431,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(key, true, null, false);
-            return s == null ? null : s.firstKeyOrNull();
+            if (!descending ? tooHigh(key) : tooLow(key)) {
+                return null;
+            }
+            return ((!descending ? tooLow(key) : tooHigh(key))
+                    ? this : subMapInRange(key, true, null, false)).firstKeyOrNull();
         }
 
         @Override
@@ -2386,8 +2443,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(key, false, null, false);
-            return s == null ? null : s.firstEntryOrNull();
+            if (!descending ? tooHigh(key) : tooLow(key)) {
+                return null;
+            }
+            return ((!descending ? tooLow(key) : tooHigh(key))
+                    ? this : subMapInRange(key, false, null, false)).firstEntryOrNull();
         }
 
         @Override
@@ -2395,8 +2455,11 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (key == null) {
                 throw new NullPointerException();
             }
-            final SubMap<K,V> s = subMapOrNull(key, false, null, false);
-            return s == null ? null : s.firstKeyOrNull();
+            if (!descending ? tooHigh(key) : tooLow(key)) {
+                return null;
+            }
+            return ((!descending ? tooLow(key) : tooHigh(key))
+                    ? this : subMapInRange(key, false, null, false)).firstKeyOrNull();
         }
 
         @Override
@@ -2464,7 +2527,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (fromKey == null || toKey == null) {
                 throw new NullPointerException();
             }
-            return subMapOrThrow(fromKey, fromInclusive, toKey, toInclusive);
+            return subMapImpl(fromKey, fromInclusive, toKey, toInclusive);
         }
 
         @Override
@@ -2472,7 +2535,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (toKey == null) {
                 throw new NullPointerException();
             }
-            return subMapOrThrow(null, false, toKey, inclusive);
+            return subMapImpl(null, false, toKey, inclusive);
         }
 
         @Override
@@ -2480,7 +2543,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             if (fromKey == null) {
                 throw new NullPointerException();
             }
-            return subMapOrThrow(fromKey, inclusive, null, false);
+            return subMapImpl(fromKey, inclusive, null, false);
         }
 
         @Override
@@ -2498,34 +2561,30 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return tailMap(fromKey, true);
         }
 
-        private SubMap<K,V> subMapOrThrow(final K fromKey,
+        private SubMap<K,V> subMapImpl(final K fromKey,
                                           final boolean fromIncl,
                                           final K toKey,
                                           final boolean toIncl) {
-            final SubMap<K,V> s = subMapOrNull(fromKey, fromIncl, toKey, toIncl);
-            if (s == null) {
-                throw new IllegalArgumentException();
+            if (fromKey != null) {
+                requireInRange(fromKey);
             }
-            return s;
+            if (toKey != null) {
+                requireInRange(toKey);
+            }
+            return subMapInRange(fromKey, fromIncl, toKey, toIncl);
         }
 
-        private SubMap<K,V> subMapOrNull(final K fromKey,
-                                         final boolean fromIncl,
-                                         final K toKey,
-                                         final boolean toIncl) {
-            if (fromKey != null && !inRange(fromKey)) {
-                return null;
-            }
-            if (toKey != null && !inRange(toKey)) {
-                return null;
-            }
+        private SubMap<K,V> subMapInRange(final K fromKey,
+                                          final boolean fromIncl,
+                                          final K toKey,
+                                          final boolean toIncl) {
             final Comparable<? super K> fromCmp = fromKey == null ? null : m.comparable(fromKey);
             final Comparable<? super K> toCmp = toKey == null ? null : m.comparable(toKey);
 
             if (fromKey != null && toKey != null) {
                 final int c = fromCmp.compareTo(toKey);
                 if ((!descending ? c > 0 : c < 0)) {
-                    return null;
+                    throw new IllegalArgumentException();
                 }
             }
             
