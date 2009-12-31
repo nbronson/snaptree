@@ -12,7 +12,7 @@ public class AllSnapTreeMap {
         jsr166tests.jtreg.util.Collections.RacingCollections.main(new String[0]);
         jsr166tests.jtreg.util.Map.Get.main(new String[0]);
         jsr166tests.jtreg.util.Map.LockStep.main(new String[0]);
-        jsr166tests.tck.JSR166TestCase.main(new String[0]);
+        //jsr166tests.tck.JSR166TestCase.main(new String[0]);
         jsr166tests.tck.SnapTreeSubMapTest.main(new String[0]);
         jsr166tests.tck.SnapTreeMapTest.main(new String[0]);
     }
