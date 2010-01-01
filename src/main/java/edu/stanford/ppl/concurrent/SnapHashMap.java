@@ -12,16 +12,16 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /** This SnapHashMap has separate types for the branch and the leaf.  Branches
- *  extends AtomicReferenceArray, and leaves use Java monitors.
+ *  extend AtomicReferenceArray, and leaves use Java monitors.
  */
 public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<K,V>, Cloneable, Serializable {
     private static final long serialVersionUID = 9212449426984968891L;
 
-    private static final int LOG_BF = 5;
+    private static final int LOG_BF = 8;
     private static final int BF = 1 << LOG_BF;
     private static final int BF_MASK = BF - 1;
-    private static final int maxLoad(final int capacity) { return capacity - (capacity >> 2); /* 0.75 */ }
-    private static final int minLoad(final int capacity) { return (capacity >> 2); /* 0.25 */ }
+    private static int maxLoad(final int capacity) { return capacity - (capacity >> 2); /* 0.75 */ }
+    private static int minLoad(final int capacity) { return (capacity >> 2); /* 0.25 */ }
 
     // LEAF_MAX_CAPACITY * 2 / BF must be >= LEAF_MIN_CAPACITY
     private static final int LOG_LEAF_MIN_CAPACITY = 3;
@@ -29,7 +29,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     private static final int LEAF_MIN_CAPACITY = 1 << LOG_LEAF_MIN_CAPACITY;
     private static final int LEAF_MAX_CAPACITY = 1 << LOG_LEAF_MAX_CAPACITY;
 
-    private static final int ROOT_SHIFT = LOG_LEAF_MAX_CAPACITY;
+    private static final int ROOT_SHIFT = 0;
 
     static class Generation {
     }
@@ -61,7 +61,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     /** A small hash table.  The caller is responsible for synchronization in most
      *  cases.
      */
-    static class LeafMap<K,V> {
+    static final class LeafMap<K,V> {
         /** Set to null when this LeafMap is split into pieces. */
         Generation gen;
         HashEntry<K,V>[] table;
@@ -75,33 +75,37 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
          *  help to restore the splitting condition.
          */
         volatile int uniq;
+        final int shift;
 
         @SuppressWarnings("unchecked")
-        LeafMap(final Generation gen) {
+        LeafMap(final Generation gen, final int shift) {
             this.gen = gen;
             this.table = (HashEntry<K,V>[]) new HashEntry[LEAF_MIN_CAPACITY];
             this.uniq = 0;
+            this.shift = shift;
         }
 
+        @SuppressWarnings("unchecked")
         private LeafMap(final Generation gen, final LeafMap src) {
             this.gen = gen;
             this.table = (HashEntry<K,V>[]) src.table.clone();
             this.uniq = src.uniq;
+            this.shift = src.shift;
         }
 
-        LeafMap cloneForWriteL(final Generation gen) {
+        LeafMap cloneForWrite(final Generation gen) {
             return new LeafMap(gen, this);
         }
 
-        boolean hasSplitL() {
+        boolean hasSplit() {
             return gen == null;
         }
 
-        boolean containsKeyU(final K key, final int hash) {
+        boolean containsKey(final Object key, final int hash) {
             if (uniq == 0) { // volatile read
                 return false;
             }
-            HashEntry<K,V> e = table[hash & (table.length - 1)];
+            HashEntry<K,V> e = table[(hash >> shift) & (table.length - 1)];
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     return true;
@@ -116,7 +120,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
 
         /** This is only valid for a quiesced map. */
-        boolean containsValueQ(final Object value) {
+        boolean containsValue(final Object value) {
             for (HashEntry<K,V> head : table) {
                 HashEntry<K,V> e = head;
                 while (e != null) {
@@ -133,11 +137,11 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return false;
         }
 
-        V getU(final K key, final int hash) {
+        V get(final Object key, final int hash) {
             if (uniq == 0) { // volatile read
                 return null;
             }
-            HashEntry<K,V> e = table[hash & (table.length - 1)];
+            HashEntry<K,V> e = table[(hash >> shift) & (table.length - 1)];
             while (e != null) {
                 if (e.hash == hash && key.equals(e.key)) {
                     final V v = e.value;
@@ -151,40 +155,40 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return null;
         }
 
-        private void growIfNecessaryL() {
-            assert(!hasSplitL());
+        private void growIfNecessary() {
+            assert(!hasSplit());
             final int n = table.length;
             if (n < LEAF_MAX_CAPACITY && uniq > maxLoad(n)) {
-                rehashL(n << 1);
+                rehash(n << 1);
             }
         }
 
-        private void shrinkIfNecessaryL() {
-            assert(!hasSplitL());
+        private void shrinkIfNecessary() {
+            assert(!hasSplit());
             final int n = table.length;
             if (n > LEAF_MIN_CAPACITY && uniq < minLoad(n)) {
-                rehashL(n >> 1);
+                rehash(n >> 1);
             }
         }
 
         @SuppressWarnings("unchecked")
-        private void rehashL(final int newSize) {
+        private void rehash(final int newSize) {
             final HashEntry<K,V>[] prevTable = table;
             table = (HashEntry<K,V>[]) new HashEntry[newSize];
             for (HashEntry<K,V> head : prevTable) {
-                reputAllL(head);
+                reputAll(head);
             }
         }
 
-        private void reputAllL(final HashEntry<K,V> head) {
+        private void reputAll(final HashEntry<K,V> head) {
             if (head != null) {
-                reputAllL(head.next);
-                reputL(head);
+                reputAll(head.next);
+                reput(head);
             }
         }
 
-        private void reputL(final HashEntry<K,V> e) {
-            final int i = e.hash & (table.length - 1);
+        private void reput(final HashEntry<K,V> e) {
+            final int i = (e.hash >> shift) & (table.length - 1);
             final HashEntry<K,V> next = table[i];
             if (e.next == next) {
                 // no new entry needed
@@ -194,9 +198,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             }
         }
 
-        V putL(final K key, final int hash, final V value) {
-            growIfNecessaryL();
-            final int i = hash & (table.length - 1);
+        V put(final K key, final int hash, final V value) {
+            growIfNecessary();
+            final int i = (hash >> shift) & (table.length - 1);
             final HashEntry<K,V> head = table[i];
             HashEntry<K,V> e = head;
             int insDelta = 1;
@@ -227,9 +231,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return null;
         }
 
-        V removeL(final K key, final int hash) {
-            shrinkIfNecessaryL();
-            final int i = hash & (table.length - 1);
+        V remove(final Object key, final int hash) {
+            shrinkIfNecessary();
+            final int i = (hash >> shift) & (table.length - 1);
             final HashEntry<K,V> head = table[i];
             HashEntry<K,V> e = head;
             int delDelta = -1;
@@ -267,9 +271,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
         //////// CAS-like
 
-        V putIfAbsentL(final K key, final int hash, final V value) {
-            growIfNecessaryL();
-            final int i = hash & (table.length - 1);
+        V putIfAbsent(final K key, final int hash, final V value) {
+            growIfNecessary();
+            final int i = (hash >> shift) & (table.length - 1);
             final HashEntry<K,V> head = table[i];
             HashEntry<K,V> e = head;
             int insDelta = 1;
@@ -291,8 +295,8 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return null;
         }
 
-        boolean replaceL(final K key, final int hash, final V oldValue, final V newValue) {
-            final int i = hash & (table.length - 1);
+        boolean replace(final K key, final int hash, final V oldValue, final V newValue) {
+            final int i = (hash >> shift) & (table.length - 1);
             final HashEntry<K,V> head = table[i];
             HashEntry<K,V> e = head;
             while (e != null) {
@@ -320,8 +324,8 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return false;
         }
 
-        V replaceL(final K key, final int hash, final V value) {
-            final int i = hash & (table.length - 1);
+        V replace(final K key, final int hash, final V value) {
+            final int i = (hash >> shift) & (table.length - 1);
             final HashEntry<K,V> head = table[i];
             HashEntry<K,V> e = head;
             while (e != null) {
@@ -344,9 +348,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return null;
         }
 
-        boolean removeL(final K key, final int hash, final V value) {
-            shrinkIfNecessaryL();
-            final int i = hash & (table.length - 1);
+        boolean remove(final Object key, final int hash, final Object value) {
+            shrinkIfNecessary();
+            final int i = (hash >> shift) & (table.length - 1);
             final HashEntry<K,V> head = table[i];
             HashEntry<K,V> e = head;
             int delDelta = -1;
@@ -389,20 +393,23 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
 
         //////// Leaf splitting
 
-        boolean shouldSplitL() {
+        boolean shouldSplit() {
             return uniq > maxLoad(LEAF_MAX_CAPACITY);
         }
 
         @SuppressWarnings("unchecked")
-        LeafMap<K,V>[] splitL(final int shift) {
-            assert(!hasSplitL());
+        LeafMap<K,V>[] split() {
+            assert(!hasSplit());
 
             final LeafMap<K,V>[] pieces = (LeafMap<K,V>[]) new LeafMap[BF];
             for (int i = 0; i < pieces.length; ++i) {
-                pieces[i] = new LeafMap<K,V>(gen);
+                pieces[i] = new LeafMap<K,V>(gen, shift + LOG_BF);
             }
             for (HashEntry<K,V> head : table) {
-                scatterAllL(pieces, shift, head);
+                for (HashEntry<K,V> e = head; e != null; e = e.next) {
+                    final int i = (e.hash >> shift) & BF_MASK;
+                    pieces[i].put(e);
+                }
             }
 
             gen = null; // this marks us as split
@@ -410,29 +417,25 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return pieces;
         }
 
-        private static <K,V> void scatterAllL(final LeafMap<K,V>[] pieces, final int shift, final HashEntry<K,V> head) {
-            if (head != null) {
-                scatterAllL(pieces, shift, head.next);
-                pieces[(head.hash >> shift) & (pieces.length - 1)].putL(head);
-            }
-        }
-
-        private void putL(final HashEntry<K,V> entry) {
-            growIfNecessaryL();
-            final int i = entry.hash & (table.length - 1);
+        private void put(final HashEntry<K,V> entry) {
+            growIfNecessary();
+            final int i = (entry.hash >> shift) & (table.length - 1);
             final HashEntry<K,V> head = table[i];
 
             // is this hash a duplicate?
-            HashEntry<K,V> e = head;
-            while (e != null && e.hash != entry.hash) {
-                e = e.next;
+            int uDelta = 1;
+            for (HashEntry<K,V> e = head; e != null; e = e.next) {
+                if (e.hash == entry.hash) {
+                    uDelta = 0;
+                    break;
+                }
             }
-            if (e == null) {
-                ++uniq;
+            if (uDelta != 0) {
+                uniq += uDelta;
             }
 
             if (entry.next == head) {
-                // no new entry needed
+                // we can reuse the existing entry
                 table[i] = entry;
             } else {
                 table[i] = new HashEntry<K,V>(gen, entry.key, entry.hash, entry.value, head);
@@ -440,7 +443,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    static class BranchMap<K,V> extends AtomicReferenceArray<Object> {
+    static final class BranchMap<K,V> extends AtomicReferenceArray<Object> {
         final Generation gen;
         final int shift;
 
@@ -469,27 +472,16 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return new BranchMap<K,V>(gen, this);
         }
 
-        boolean containsKey(final K key, final int hash) {
-            final Object child = getChild(hash);
-            if (child instanceof LeafMap) {
-                return ((LeafMap<K,V>) child).containsKeyU(key, hash);
+        @SuppressWarnings("unchecked")
+        boolean containsKey(final Object key, final int hash) {
+            final Object child = get(indexFor(hash));
+            if (child == null) {
+                return false;
+            } else if (child instanceof LeafMap) {
+                return ((LeafMap<K,V>) child).containsKey(key, hash);
             } else {
                 return ((BranchMap<K,V>) child).containsKey(key, hash);
             }
-        }
-
-        private Object getChild(final int hash) {
-            final int i = indexFor(hash);
-            Object result = get(i);
-            if (result == null) {
-                // try to create the leaf
-                result = new LeafMap<K,V>(gen);
-                if (!compareAndSet(i, null, result)) {
-                    // someone else succeeded
-                    result = get(i);
-                }
-            }
-            return result;
         }
 
         private int indexFor(final int hash) {
@@ -497,12 +489,13 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
 
         /** This is only valid for a quiesced map. */
+        @SuppressWarnings("unchecked")
         boolean containsValueQ(final Object value) {
             for (int i = 0; i < BF; ++i) {
                 final Object child = get(i);
                 if (child != null) {
                     if (child instanceof LeafMap) {
-                        if (((LeafMap<K,V>) child).containsValueQ(value)) {
+                        if (((LeafMap<K,V>) child).containsValue(value)) {
                             return true;
                         }
                     } else {
@@ -515,44 +508,66 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             return false;
         }
 
-        V get(final K key, final int hash) {
-            final Object child = getChild(hash);
-            if (child instanceof LeafMap) {
-                return ((LeafMap<K,V>) child).getU(key, hash);
+        @SuppressWarnings("unchecked")
+        V get(final Object key, final int hash) {
+            final Object child = get(indexFor(hash));
+            if (child == null) {
+                return null;
+            } else if (child instanceof LeafMap) {
+                return ((LeafMap<K,V>) child).get(key, hash);
             } else {
                 return ((BranchMap<K,V>) child).get(key, hash);
             }
         }
 
+        @SuppressWarnings("unchecked")
         V put(final K key, final int hash, final V value) {
-            Object child = getChild(hash);
+            final int index = indexFor(hash);
+            Object child = getOrCreateChild(index);
             while (child instanceof LeafMap) {
                 final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                 synchronized (leaf) {
-                    child = prepareForLeafMutationL(hash, leaf);
+                    child = prepareForLeafMutation(index, leaf);
                     if (child == null) {
                         // no replacement was provided
-                        return leaf.putL(key, hash, value);
+                        return leaf.put(key, hash, value);
                     }
                 }
             }
-            return unsharedBranch(hash, child).put(key, hash, value);
+            return unsharedBranch(index, child).put(key, hash, value);
         }
 
-        private Object prepareForLeafMutationL(final int hash, final LeafMap<K,V> leaf) {
-            if (leaf.hasSplitL()) {
-                // leaf was split between our getChild and our lock, reread
-                return get(indexFor(hash));
-            } else if (leaf.shouldSplitL()) {
-                // no need to CAS, because everyone is using the lock
-                final int newShift = shift + LOG_BF;
-                final Object repl = new BranchMap<K,V>(gen, newShift, leaf.splitL(newShift));
-                lazySet(indexFor(hash), repl);
+        private Object getOrCreateChild(final int index) {
+            final Object result = get(index);
+            return result != null ? result : createChild(index);
+        }
+
+        private Object createChild(final int index) {
+            final LeafMap<K,V> repl = new LeafMap<K,V>(gen, shift + LOG_BF);
+            if (compareAndSet(index, null, repl)) {
+                // success
                 return repl;
+            } else {
+                // if we failed, someone else succeeded
+                return get(index);
+            }
+        }
+
+        private Object prepareForLeafMutation(final int index, final LeafMap<K,V> leaf) {
+            if (leaf.shouldSplit()) {
+                if (leaf.hasSplit()) {
+                    // leaf was split between our getOrCreateChild and our lock, reread
+                    return get(index);
+                } else {
+                    // no need to CAS, because everyone is using the lock
+                    final Object repl = new BranchMap<K,V>(gen, shift + LOG_BF, leaf.split());
+                    lazySet(index, repl);
+                    return repl;
+                }
             } else if (leaf.gen != gen) {
                 // copy-on-write
-                final Object repl = leaf.cloneForWriteL(gen);
-                lazySet(indexFor(hash), repl);
+                final Object repl = leaf.cloneForWrite(gen);
+                lazySet(index, repl);
                 return repl;
             } else {
                 // OKAY
@@ -560,97 +575,107 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             }
         }
 
-        private BranchMap<K,V> unsharedBranch(final int hash, final Object child) {
+        @SuppressWarnings("unchecked")
+        private BranchMap<K,V> unsharedBranch(final int index, final Object child) {
             final BranchMap<K,V> branch = (BranchMap<K,V>) child;
             if (branch.gen == gen) {
                 return branch;
             } else {
                 final BranchMap<K,V> fresh = branch.cloneForWrite(gen);
-                final int i = indexFor(hash);
-                if (compareAndSet(i, child, fresh)) {
+                if (compareAndSet(index, child, fresh)) {
                     return fresh;
                 } else {
                     // if we failed someone else succeeded
-                    return (BranchMap<K,V>) get(i);
+                    return (BranchMap<K,V>) get(index);
                 }
             }
         }
 
-        V remove(final K key, final int hash) {
-            Object child = getChild(hash);
+        @SuppressWarnings("unchecked")
+        V remove(final Object key, final int hash) {
+            final int index = indexFor(hash);
+            Object child = getOrCreateChild(index);
             while (child instanceof LeafMap) {
                 final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                 synchronized (leaf) {
-                    child = prepareForLeafMutationL(hash, leaf);
+                    child = prepareForLeafMutation(index, leaf);
                     if (child == null) {
                         // no replacement was provided
-                        return leaf.removeL(key, hash);
+                        return leaf.remove(key, hash);
                     }
                 }
             }
-            return unsharedBranch(hash, child).remove(key, hash);
+            return unsharedBranch(index, child).remove(key, hash);
         }
 
         //////// CAS-like
 
+        @SuppressWarnings("unchecked")
         V putIfAbsent(final K key, final int hash, final V value) {
-            Object child = getChild(hash);
+            final int index = indexFor(hash);
+            Object child = getOrCreateChild(index);
             while (child instanceof LeafMap) {
                 final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                 synchronized (leaf) {
-                    child = prepareForLeafMutationL(hash, leaf);
+                    child = prepareForLeafMutation(index, leaf);
                     if (child == null) {
                         // no replacement was provided
-                        return leaf.putIfAbsentL(key, hash, value);
+                        return leaf.putIfAbsent(key, hash, value);
                     }
                 }
             }
-            return unsharedBranch(hash, child).putIfAbsent(key, hash, value);
+            return unsharedBranch(index, child).putIfAbsent(key, hash, value);
         }
 
+        @SuppressWarnings("unchecked")
         boolean replace(final K key, final int hash, final V oldValue, final V newValue) {
-            Object child = getChild(hash);
+            final int index = indexFor(hash);
+            Object child = getOrCreateChild(index);
             while (child instanceof LeafMap) {
                 final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                 synchronized (leaf) {
-                    child = prepareForLeafMutationL(hash, leaf);
+                    child = prepareForLeafMutation(index, leaf);
                     if (child == null) {
                         // no replacement was provided
-                        return leaf.replaceL(key, hash, oldValue, newValue);
+                        return leaf.replace(key, hash, oldValue, newValue);
                     }
                 }
             }
-            return unsharedBranch(hash, child).replace(key, hash, oldValue, newValue);
+            return unsharedBranch(index, child).replace(key, hash, oldValue, newValue);
         }
 
+        @SuppressWarnings("unchecked")
         V replace(final K key, final int hash, final V value) {
-            Object child = getChild(hash);
+            final int index = indexFor(hash);
+            Object child = getOrCreateChild(index);
             while (child instanceof LeafMap) {
                 final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                 synchronized (leaf) {
-                    child = prepareForLeafMutationL(hash, leaf);
+                    child = prepareForLeafMutation(index, leaf);
                     if (child == null) {
                         // no replacement was provided
-                        return leaf.replaceL(key, hash, value);
+                        return leaf.replace(key, hash, value);
                     }
                 }
             }
-            return unsharedBranch(hash, child).replace(key, hash, value);
+            return unsharedBranch(index, child).replace(key, hash, value);
         }
 
-        boolean remove(final K key, final int hash, final V value) {
-            Object child = getChild(hash);
+        @SuppressWarnings("unchecked")
+        boolean remove(final Object key, final int hash, final Object value) {
+            final int index = indexFor(hash);
+            Object child = getOrCreateChild(index);
             while (child instanceof LeafMap) {
                 final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                 synchronized (leaf) {
-                    child = prepareForLeafMutationL(hash, leaf);
+                    child = prepareForLeafMutation(index, leaf);
                     if (child == null) {
                         // no replacement was provided
-                        return leaf.removeL(key, hash, value);
+                        return leaf.remove(key, hash, value);
                     }
                 }
             }
-            return unsharedBranch(hash, child).remove(key, hash, value);
+            return unsharedBranch(index, child).remove(key, hash, value);
         }
     }
 
@@ -695,6 +720,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         putAll(source);
     }
 
+    @SuppressWarnings("unchecked")
     public SnapHashMap(final SortedMap<K,? extends V> source) {
         if (source instanceof SnapHashMap) {
             final SnapHashMap<K,V> s = (SnapHashMap<K,V>) source;
@@ -706,8 +732,8 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         }
     }
 
-    @SuppressWarnings("unchecked")
     @Override
+    @SuppressWarnings("unchecked")
     public SnapHashMap<K,V> clone() {
         final SnapHashMap<K,V> copy;
         try {
@@ -734,7 +760,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     public boolean containsKey(final Object key) {
-        return rootHolder.read().containsKey((K) key, hash(key.hashCode()));
+        return rootHolder.read().containsKey(key, hash(key.hashCode()));
     }
 
     public boolean containsValue(final Object value) {
@@ -744,8 +770,21 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         return rootHolder.frozen().containsValueQ(value);
     }
 
+    @SuppressWarnings("unchecked")
     public V get(final Object key) {
-        return rootHolder.read().get((K) key, hash(key.hashCode()));
+        //return rootHolder.read().get(key, hash(key.hashCode()));
+        final int hash = hash(key.hashCode());
+        BranchMap<K,V> node = rootHolder.read();
+        while (true) {
+            final Object child = node.get(node.indexFor(hash));
+            if (child instanceof LeafMap) {
+                return ((LeafMap<K,V>) child).get(key, hash);
+            } else if (child == null) {
+                return null;
+            }
+            // else recurse
+            node = (BranchMap<K,V>) child;
+        }
     }
 
     public V put(final K key, final V value) {
@@ -771,7 +810,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         int sizeDelta = 0;
         try {
-            final V prev = rootHolder.mutable().remove((K) key, h);
+            final V prev = rootHolder.mutable().remove(key, h);
             if (prev != null) {
                 sizeDelta = -1;
             }
@@ -835,7 +874,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         final Epoch.Ticket ticket = rootHolder.beginMutation();
         int sizeDelta = 0;
         try {
-            final boolean result = rootHolder.mutable().remove((K) key, h, (V) value);
+            final boolean result = rootHolder.mutable().remove(key, h, value);
             if (result) {
                 sizeDelta = -1;
             }
@@ -943,17 +982,17 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     abstract class AbstractIter {
 
         private final BranchMap<K,V> root;
-        private int currentDepth;
         private LeafMap<K,V> currentLeaf;
         private HashEntry<K,V> currentEntry;
         private HashEntry<K,V> prevEntry;
 
         AbstractIter(final BranchMap<K,V> frozenRoot) {
             this.root = frozenRoot;
-            pushMin(frozenRoot, 1, 0);
+            findFirst(frozenRoot, 0);
         }
 
-        private boolean pushMin(final BranchMap<K,V> branch, final int depth, final int minIndex) {
+        @SuppressWarnings("unchecked")
+        private boolean findFirst(final BranchMap<K,V> branch, final int minIndex) {
             for (int i = minIndex; i < BF; ++i) {
                 final Object child = branch.get(i);
                 if (child != null) {
@@ -961,10 +1000,9 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                         final LeafMap<K,V> leaf = (LeafMap<K,V>) child;
                         if (leaf.uniq > 0) {
                             // success!
-                            currentDepth = depth;
-                            currentLeaf = leaf;
                             for (HashEntry<K,V> e : leaf.table) {
                                 if (e != null) {
+                                    currentLeaf = leaf;
                                     currentEntry = e;
                                     return true;
                                 }
@@ -972,7 +1010,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
                             throw new Error("logic error");
                         }
                     } else {
-                        if (pushMin((BranchMap<K,V>) child, depth + 1, 0)) {
+                        if (findFirst((BranchMap<K,V>) child, 0)) {
                             return true;
                         }
                     }
@@ -990,7 +1028,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             }
 
             // advance to the next non-empty chain
-            int i = (currentEntry.hash & (currentLeaf.table.length - 1)) + 1;
+            int i = ((currentEntry.hash >> currentLeaf.shift) & (currentLeaf.table.length - 1)) + 1;
             while (i < currentLeaf.table.length) {
                 if (currentLeaf.table[i] != null) {
                     currentEntry = currentLeaf.table[i];
@@ -1000,27 +1038,18 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
             }
 
             // now we are moving between LeafMap-s
-            while (currentDepth > 0) {
-                // for depth that was 1, we want the root branch's shift
-                --currentDepth;
-                final int curI = (currentEntry.hash >> (ROOT_SHIFT + currentDepth * LOG_BF)) & BF_MASK;
-                if (pushMin(findBranch(), currentDepth + 1, curI + 1)) {
-                    return;
-                }
+            if (!findSuccessor(root)) {
+                currentEntry = null;
             }
-
-            // we're done
-            currentEntry = null;
         }
 
-        private BranchMap<K,V> findBranch() {
+        @SuppressWarnings("unchecked")
+        private boolean findSuccessor(final BranchMap<K,V> branch) {
             final int h = currentEntry.hash;
-            BranchMap<K,V> result = root;
-            for (int d = 0; d < currentDepth; ++d) {
-                final int i = (h >> (ROOT_SHIFT + d * LOG_BF)) & BF_MASK;
-                result = (BranchMap<K,V>) result.get(i);
-            }
-            return result;
+            final int i = (h >> branch.shift) & BF_MASK;
+            final Object child = branch.get(i);
+            return (child instanceof BranchMap && findSuccessor((BranchMap<K,V>) child))
+                    || findFirst(branch, i + 1);
         }
 
         public boolean hasNext() {
@@ -1117,6 +1146,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         writeEntry(xo, h.frozen());
     }
 
+    @SuppressWarnings("unchecked")
     private void writeEntry(final ObjectOutputStream xo, final BranchMap<K,V> branch) throws IOException {
         for (int i = 0; i < BF; ++i) {
             final Object child = branch.get(i);
@@ -1139,6 +1169,7 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
     }
 
     /** Reverses {@link #writeObject(java.io.ObjectOutputStream)}. */
+    @SuppressWarnings("unchecked")
     private void readObject(final ObjectInputStream xi) throws IOException, ClassNotFoundException  {
         xi.defaultReadObject();
 
@@ -1154,39 +1185,45 @@ public class SnapHashMap<K,V> extends AbstractMap<K,V> implements ConcurrentMap<
         rootHolder = new COWMgr<K,V>(root, size);
     }
 
-    public static void main(final String[] args) {
-        for (int i = 0; i < 10; ++i) {
-            runOne(new SnapHashMap<Integer,String>());
-//            runOne(new java.util.concurrent.ConcurrentHashMap<Integer,String>());
-//            runOne(new SnapTreeMap<Integer,String>());
-//            runOne(new java.util.concurrent.ConcurrentSkipListMap<Integer,String>());
+//    public static void main(final String[] args) {
+//        for (int i = 0; i < 10; ++i) {
+//            runOne(new SnapHashMap<Integer,String>());
+//            runOne(new SnapHashMap<Integer,String>());
+//            runOne(new SnapHashMap<Integer,String>());
 //            System.out.println();
-        }
-    }
-
-    private static void runOne(final Map<Integer,String> m) {
-        final long t0 = System.currentTimeMillis();
-        for (int p = 0; p < 10; ++p) {
-            for (int i = 0; i < 100000; ++i) {
-                m.put(Integer.reverse(i), "data");
-            }
-        }
-        final long t1 = System.currentTimeMillis();
-        for (int p = 0; p < 10; ++p) {
-            for (int i = 0; i < 100000; ++i) {
-                m.get(Integer.reverse(i));
-            }
-        }
-        final long t2 = System.currentTimeMillis();
-        for (int p = 0; p < 10; ++p) {
-            for (int i = 0; i < 100000; ++i) {
-                m.get(Integer.reverse(-(i + 1)));
-            }
-        }
-        final long t3 = System.currentTimeMillis();
-        System.out.println(
-                (t1 - t0) + " nanos/put, " +
-                (t2 - t1) + " nanos/get hit, " +
-                (t3 - t2) + " nanos/get miss : " + m.getClass().getSimpleName());
-    }
+//            runOne(new java.util.concurrent.ConcurrentHashMap<Integer,String>());
+//            runOne(new java.util.concurrent.ConcurrentHashMap<Integer,String>());
+//            runOne(new java.util.concurrent.ConcurrentHashMap<Integer,String>());
+//            System.out.println();
+////            runOne(new SnapTreeMap<Integer,String>());
+////            runOne(new java.util.concurrent.ConcurrentSkipListMap<Integer,String>());
+//            System.out.println();
+//        }
+//    }
+//
+//    private static void runOne(final Map<Integer,String> m) {
+//        final long t0 = System.currentTimeMillis();
+//        for (int p = 0; p < 10; ++p) {
+//            for (int i = 0; i < 100000; ++i) {
+//                m.put(Integer.reverse(i), "data");
+//            }
+//        }
+//        final long t1 = System.currentTimeMillis();
+//        for (int p = 0; p < 10; ++p) {
+//            for (int i = 0; i < 100000; ++i) {
+//                m.get(Integer.reverse(i));
+//            }
+//        }
+//        final long t2 = System.currentTimeMillis();
+//        for (int p = 0; p < 10; ++p) {
+//            for (int i = 0; i < 100000; ++i) {
+//                m.get(Integer.reverse(-(i + 1)));
+//            }
+//        }
+//        final long t3 = System.currentTimeMillis();
+//        System.out.println(
+//                (t1 - t0) + " nanos/put, " +
+//                (t2 - t1) + " nanos/get hit, " +
+//                (t3 - t2) + " nanos/get miss : " + m.getClass().getSimpleName());
+//    }
 }
