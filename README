@@ -1,0 +1,11 @@
+This repository contains the reference implementation of SnapTree,
+a concurrent AVL tree with fast cloning, snapshots, and consistent
+iteration.  It is described in the paper "A Practical Concurrent Binary
+Search Tree", by concurrent AVL tree with fast cloning, based on the
+algorithm of N. Bronson, J. Casper, H. Chafi, and K. Olukotun, published
+in PPoPP'10.
+
+There are a variety of maps here.  SnapTreeMap is by far the
+most well tested and robust.  It passes all of the unit tests for
+ConcurrentSkipListMap, while also guaranteeing that clone() is an atomic
+(O(1)) operation and that iteration is consistent.
