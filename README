@@ -9,3 +9,5 @@ There are a variety of maps here.  SnapTreeMap is by far the
 most well tested and robust.  It passes all of the unit tests for
 ConcurrentSkipListMap, while also guaranteeing that clone() is an atomic
 (O(1)) operation and that iteration is consistent.
+
+http://ppl.stanford.edu/papers/ppopp207-bronson.pdf
