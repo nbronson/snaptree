@@ -212,8 +212,13 @@ abstract public class CopyOnWriteManager<E> implements Cloneable {
             a = succ;
         }
 
-        copy._active = new COWEpoch(cloneFrozen(f), f, a.initialSize);
+        copy.createNewEpoch(f, a);
         return copy;
+    }
+
+    private void createNewEpoch(E f, COWEpoch a)
+    {
+        _active = new COWEpoch(cloneFrozen(f), f, a.initialSize);
     }
 
     /** Returns a reference to the tree structure suitable for a read
