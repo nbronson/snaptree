@@ -1,26 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+ ~ Copyright (c) 2009 Stanford University, unless otherwise specified.
+ ~ All rights reserved.
+ ~
+ ~ This software was developed by the Pervasive Parallelism Laboratory of
+ ~ Stanford University, California, USA.
+ ~
+ ~ Permission to use, copy, modify, and distribute this software in source
+ ~ or binary form for any purpose with or without fee is hereby granted,
+ ~ provided that the following conditions are met:
+ ~
+ ~    1. Redistributions of source code must retain the above copyright
+ ~       notice, this list of conditions and the following disclaimer.
+ ~
+ ~    2. Redistributions in binary form must reproduce the above copyright
+ ~       notice, this list of conditions and the following disclaimer in the
+ ~       documentation and/or other materials provided with the distribution.
+ ~
+ ~    3. Neither the name of Stanford University nor the names of its
+ ~       contributors may be used to endorse or promote products derived
+ ~       from this software without specific prior written permission.
+ ~
+ ~ THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ ~ ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ ~ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ~ ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ ~ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ ~ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ ~ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ ~ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ ~ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ ~ OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ ~ SUCH DAMAGE.
+-->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
-        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
                       http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.sonatype.oss</groupId>
+    <artifactId>oss-parent</artifactId>
+    <version>7</version>
+  </parent>
+
   <groupId>edu.stanford.ppl</groupId>
   <artifactId>snaptree</artifactId>
-  <packaging>jar</packaging>
   <version>0.1-SNAPSHOT</version>
-  <name>snaptree</name>
-  <build>
-    <plugins>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <version>2.0.2</version>
-        <configuration>
-          <source>1.6</source>
-          <target>1.6</target>
-        </configuration>
-      </plugin>
-    </plugins>
-  </build>
+  <packaging>jar</packaging>
+
+  <name>SnapTree RI</name>
+  <description>The reference implementation of SnapTree,
+  a concurrent AVL tree with fast cloning, snapshots, and consistent
+  iteration.</description>
+  <url>https://github.com/nbronson/snaptree</url>
+  <inceptionYear>2009</inceptionYear>
+  <licenses>
+    <license>
+      <name>SNAPTREE LICENSE</name>
+      <url>https://raw.github.com/nbronson/snaptree/b198f84b0c927f6b5cdef080552fc26aa004d3ee/doc/LICENSE</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>nbronson</id>
+      <name>Nathan Grasso Bronson</name>
+      <roles>
+        <role>developer</role>
+      </roles>
+    </developer>
+  </developers>
+
+  <prerequisites>
+    <maven>2.2.1</maven>
+  </prerequisites>
+
+  <scm>
+    <connection>scm:git:git://github.com/nbronson/snaptree.git</connection>
+    <developerConnection>scm:git:git@github.com:nbronson/snaptree.git</developerConnection>
+    <url>http://github.com/nbronson/snaptree/tree/master/</url>
+  </scm>
+  <issueManagement>
+    <system>github</system>
+    <url>http://github.com/nbronson/snaptree/issues</url>
+  </issueManagement>
+
+  <properties>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <project.build.outputEncoding>UTF-8</project.build.outputEncoding>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>junit</groupId>
@@ -29,4 +102,49 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <artifactId>maven-clean-plugin</artifactId>
+          <version>2.4.1</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>2.3.2</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-deploy-plugin</artifactId>
+          <version>2.7</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-install-plugin</artifactId>
+          <version>2.3.1</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>2.3.2</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>2.5</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>2.11</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+    <plugins>
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <source>1.6</source>
+          <target>1.6</target>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
 </project>
