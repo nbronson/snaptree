@@ -32,7 +32,6 @@ package jsr166tests.jtreg.util.Collections;
  * @author Martin Buchholz
  */
 
-import edu.stanford.ppl.concurrent.SnapHashMap;
 import edu.stanford.ppl.concurrent.SnapTreeMap;
 
 import static java.util.Collections.*;
@@ -192,7 +191,6 @@ public class RacingCollections {
         List<Map<Integer, Boolean>> list =
             new ArrayList<Map<Integer, Boolean>>();
         list.add(new ConcurrentHashMap<Integer, Boolean>());
-        list.add(new SnapHashMap<Integer, Boolean>());
         list.add(new ConcurrentSkipListMap<Integer, Boolean>());
         list.add(new SnapTreeMap<Integer, Boolean>());
         return list;

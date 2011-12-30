@@ -32,7 +32,6 @@ package jsr166tests.jtreg.util.Map;
  * @author Martin Buchholz
  */
 
-import edu.stanford.ppl.concurrent.SnapHashMap;
 import edu.stanford.ppl.concurrent.SnapTreeMap;
 
 import java.io.*;
@@ -48,7 +47,6 @@ public class Get {
         testMap(new IdentityHashMap<Character,Boolean>());
         testMap(new LinkedHashMap<Character,Boolean>());
         testMap(new ConcurrentHashMap<Character,Boolean>());
-        testMap(new SnapHashMap<Character,Boolean>());
         testMap(new WeakHashMap<Character,Boolean>());
         testMap(new TreeMap<Character,Boolean>());
         testMap(new ConcurrentSkipListMap<Character,Boolean>());
