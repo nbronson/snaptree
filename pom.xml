@@ -133,6 +133,11 @@
         <plugin>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>2.11</version>
+          <configuration>
+            <includes>
+              <include>**/SnapTree*Test.java</include>
+            </includes>
+          </configuration>
         </plugin>
       </plugins>
     </pluginManagement>
