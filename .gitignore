@@ -1,7 +1,23 @@
+# IntelliJ project files 
+*.iml
+*.ipr
 *.iws
-system.properties
-out/
+.idea/
+
+# eclipse project file
+.settings/
+.classpath
+.project
+build/
+
+# maven generated files
 target/
-lib_managed/
-src_managed/
-project/boot/
+
+# netbeans
+nbproject/private/
+build/
+nbbuild/
+dist/
+nbdist/
+nbactions.xml
+nb-configuration.xml
