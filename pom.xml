@@ -47,7 +47,7 @@
 
   <groupId>edu.stanford.ppl</groupId>
   <artifactId>snaptree</artifactId>
-  <version>0.1-SNAPSHOT</version>
+  <version>0.1</version>
   <packaging>jar</packaging>
 
   <name>SnapTree RI</name>
