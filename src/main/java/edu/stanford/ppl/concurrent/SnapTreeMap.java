@@ -1573,9 +1573,14 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                             // ancestry relationship.  The recursive call to
                             // rebalanceToRight_nl in this case occurs after we
                             // release the lock on nLR.
+                            //
+                            // We also need to avoid damaging n.left if post-
+                            // rotation it would be an unnecessary routing node.
+                            // Note that although our height snapshots might be
+                            // stale, their zero/non-zero state can't be.
                             final int hLRL = height(nLR.left);
                             final int b = hLL0 - hLRL;
-                            if (b >= -1 && b <= 1) {
+                            if (b >= -1 && b <= 1 && !((hLL0 == 0 || hLRL == 0) && nL.vOpt == null)) {
                                 // nParent.child.left won't be damaged after a double rotation
                                 return rotateRightOverLeft_nl(nParent, n, nL, hR0, hLL0, nLR, hLRL);
                             }
@@ -1610,7 +1615,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
                         } else {
                             final int hRLR = height(nRL.right);
                             final int b = hRR0 - hRLR;
-                            if (b >= -1 && b <= 1) {
+                            if (b >= -1 && b <= 1 && !((hRR0 == 0 || hRLR == 0) && nR.vOpt == null)) {
                                 return rotateLeftOverRight_nl(nParent, n, hL0, nR, nRL, hRR0, hRLR);
                             }
                         }
@@ -1669,9 +1674,21 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return n;
         }
 
+        // we've fixed balance and height damage for n, now handle
+        // extra-routing node damage
+        if ((nLR == null || hR == 0) && n.vOpt == null) {
+            // we need to remove n and then repair
+            return n;
+        }
+
         // we've already fixed the height at nL, do we need a rotation here?
         final int balL = hLL - hNRepl;
         if (balL < -1 || balL > 1) {
+            return nL;
+        }
+
+        // nL might also have routing node damage (if nL.left was null)
+        if (hLL == 0 && nL.vOpt == null) {
             return nL;
         }
 
@@ -1720,8 +1737,16 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
             return n;
         }
 
+        if ((nRL == null || hL == 0) && n.vOpt == null) {
+            return n;
+        }
+
         final int balR = hRR - hNRepl;
         if (balR < -1 || balR > 1) {
+            return nR;
+        }
+
+        if (hRR == 0 && nR.vOpt == null) {
             return nR;
         }
 
@@ -1782,6 +1807,7 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         // caller should have performed only a single rotation if nL was going
         // to end up damaged
         assert(Math.abs(hLL - hLRL) <= 1);
+        assert(!((hLL == 0 || nLRL == null) && nL.vOpt == null));
 
         // We have damaged nParent, nLR (now parent.child), and n (now
         // parent.child.right).  n is the deepest.  Perform as many fixes as we
@@ -1793,6 +1819,12 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
         final int balN = hLRR - hR;
         if (balN < -1 || balN > 1) {
             // we need another rotation at n
+            return n;
+        }
+
+        // n might also be damaged by being an unnecessary routing node
+        if ((nLRR == null || hR == 0) && n.vOpt == null) {
+            // repair involves splicing out n and maybe more rotations
             return n;
         }
 
@@ -1861,6 +1893,9 @@ public class SnapTreeMap<K,V> extends AbstractMap<K,V> implements ConcurrentNavi
 
         final int balN = hRLL - hL;
         if (balN < -1 || balN > 1) {
+            return n;
+        }
+        if ((nRLL == null || hL == 0) && n.vOpt == null) {
             return n;
         }
         final int balRL = hRRepl - hNRepl;

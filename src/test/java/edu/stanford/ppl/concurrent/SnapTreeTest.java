@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Stanford University, unless otherwise specified.
+ * Copyright (c) 2009-2012 Stanford University, unless otherwise specified.
  * All rights reserved.
  *
  * This software was developed by the Pervasive Parallelism Laboratory of

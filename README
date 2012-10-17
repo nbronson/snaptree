@@ -8,5 +8,11 @@ with the additional guarantee that clone() is atomic and
 iteration has snapshot isolation.  For more details see
 http://ppl.stanford.edu/papers/ppopp207-bronson.pdf
 
-The current release is 0.1, which has been published to the maven central
+The current release is 0.2, which has been published to the maven central
 repository under the groupId edu.stanford.ppl and the artifactId snaptree.
+
+VERSION 0.2:
+ * Incorporates an important bugfix to isEmpty()
+
+VERSION 0.1:
+ * Initial release

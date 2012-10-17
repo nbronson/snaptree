@@ -47,7 +47,7 @@
 
   <groupId>edu.stanford.ppl</groupId>
   <artifactId>snaptree</artifactId>
-  <version>0.1</version>
+  <version>0.2</version>
   <packaging>jar</packaging>
 
   <name>SnapTree RI</name>
@@ -59,7 +59,7 @@
   <licenses>
     <license>
       <name>SNAPTREE LICENSE</name>
-      <url>https://raw.github.com/nbronson/snaptree/b198f84b0c927f6b5cdef080552fc26aa004d3ee/doc/LICENSE</url>
+      <url>https://github.com/nbronson/snaptree/blob/master/LICENSE</url>
       <distribution>repo</distribution>
     </license>
   </licenses>
@@ -147,7 +147,7 @@
           <version>2.11</version>
           <configuration>
             <includes>
-              <include>**/SnapTree*Test.java</include>
+              <include>**/*Test.java</include>
             </includes>
           </configuration>
         </plugin>
